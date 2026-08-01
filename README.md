@@ -27,9 +27,11 @@
 
 视觉识别是可选的增强信号。在“画面识别”页设置 ROI 后，把游戏切到需要采集的角色/HUD 状态，再保存角色模板。视觉分数不会阻止连招推进。
 
-如果本机安装了 OK-WW，可在“画面识别”页填写其安装目录并导入卡提希娅三剑、空中攻击、终结大招和穗穗 Forte3 标注。程序只从本机裁切模板到 `%APPDATA%`，不会将 OK-WW 的 AGPL-3.0 图片资源打包进本仓库或 EXE；识别结果仅用于提示和锚点评分。
+程序已内置 12 项稳定 HUD 模板：卡提希娅、夏空、千咲、秧秧、穗穗角色识别，卡提三剑/形态/空中攻击/终结大招，以及穗穗 Forte3。首次运行会自动安装到 `%APPDATA%` 并启用；识别结果仅用于提示、角色同步和锚点评分，不会阻止按键推进。本机安装了 OK-WW 时，仍可在“画面识别”页重新导入更新模板。
 
 控制台已内置卡提希娅、夏空、千咲、秧秧和穗穗的 HUD 头像，用于队伍卡片和队伍选择页，无需安装 OK-WW。若本机存在 OK-WW，程序仍会把重新提取的头像缓存到 `%APPDATA%\WuwaComboAssistant\okww-assets` 并优先使用。素材来源和许可见 [`src/wuwa_assistant/assets/portraits/README.md`](src/wuwa_assistant/assets/portraits/README.md)。
+
+仓库附带 [`wuwa-teaching-link-to-combo`](skills/wuwa-teaching-link-to-combo/SKILL.md) Skill。安装后只需提供鸣潮教学链接，即可按固定流程提取启动轴、循环轴、逐键条件、OK-WW 建议、识图锚点并完成测试与 EXE 构建。
 
 ## 从源码运行
 

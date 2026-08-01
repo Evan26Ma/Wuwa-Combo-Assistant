@@ -21,6 +21,7 @@ from .vision import (
     bundled_portrait_paths,
     import_okww_portraits,
     import_okww_templates,
+    install_bundled_state_templates,
 )
 
 
@@ -94,6 +95,7 @@ class DashboardApp:
         self._portrait_labels: list[tuple[tk.Label, str, int]] = []
 
         self._auto_import_okww_portraits()
+        self._install_bundled_state_templates()
         self._build_window()
         self._build_battle_overlay()
         self._auto_import_okww_templates()
@@ -1138,6 +1140,17 @@ class DashboardApp:
             self.state_vision_enabled_var.set(True)
             self.vision_enabled_var.set(True)
             self.okww_status.config(text=f"✓ 自动导入 {len(imported)} 项", fg=C["green"])
+        self.store.save(self.settings)
+
+    def _install_bundled_state_templates(self) -> None:
+        installed = install_bundled_state_templates(self.store.templates_dir)
+        if not installed:
+            return
+        state = self.settings.setdefault("state_vision", {})
+        existing = state.get("signals", {})
+        state["signals"] = {**installed, **existing}
+        state["enabled"] = True
+        self.settings["vision_enabled"] = True
         self.store.save(self.settings)
 
     def _auto_import_okww_portraits(self) -> None:

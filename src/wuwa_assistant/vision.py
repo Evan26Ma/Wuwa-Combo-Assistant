@@ -10,6 +10,7 @@ from pathlib import Path
 
 OKWW_SIGNAL_CATEGORIES = {
     "character:卡提希娅": ("char_cartethyia", "卡提希娅角色", 0.86),
+    "character:夏空": ("char_ciaccona", "夏空角色", 0.86),
     "character:秧秧": ("yangyang_sp", "秧秧角色", 0.86),
     "character:穗穗": ("char_suisui", "穗穗角色", 0.86),
     "character:千咲": ("char_chisa", "千咲角色", 0.86),
@@ -20,6 +21,21 @@ OKWW_SIGNAL_CATEGORIES = {
     "cartethyia:mid_air": ("forte_cartethyia_space", "卡提空中攻击", 0.84),
     "cartethyia:lib_big": ("lib_cartethyia_big", "芙露德莉斯终结大招", 0.86),
     "suisui:forte3": ("suisui_forte3", "穗穗 Forte3", 0.84),
+}
+
+BUNDLED_SIGNAL_ROIS = {
+    "character:卡提希娅": [0.9236979167, 0.2152777778, 0.0239583333, 0.0425925926],
+    "character:夏空": [0.92265625, 0.2092592593, 0.0234375, 0.0416666667],
+    "character:秧秧": [0.9239583333, 0.2101851852, 0.0208333333, 0.05],
+    "character:穗穗": [0.9234375, 0.2138888889, 0.0223958333, 0.0370370370],
+    "character:千咲": [0.9244791667, 0.2115740741, 0.0221354167, 0.0314814815],
+    "cartethyia:small": [0.5385416667, 0.9171296296, 0.0114583333, 0.0115740741],
+    "cartethyia:sword1": [0.4411458333, 0.9166666667, 0.0109375, 0.0217592593],
+    "cartethyia:sword2": [0.4893229167, 0.9185185185, 0.0122395833, 0.0180555556],
+    "cartethyia:sword3": [0.5385416667, 0.9171296296, 0.0114583333, 0.0194444444],
+    "cartethyia:mid_air": [0.5979166667, 0.9222222222, 0.0166666667, 0.0115740741],
+    "cartethyia:lib_big": [0.9354166667, 0.8740740741, 0.0229166667, 0.0388888889],
+    "suisui:forte3": [0.5395833333, 0.9083333333, 0.0088541667, 0.0203703704],
 }
 
 OKWW_PORTRAIT_CATEGORIES = {
@@ -55,6 +71,31 @@ def bundled_portrait_paths() -> dict[str, Path]:
         for name, filename in BUNDLED_PORTRAIT_FILES.items()
         if (directory / filename).exists()
     }
+
+
+def install_bundled_state_templates(templates_dir: Path) -> dict[str, dict]:
+    """Install packaged OK-WW crops into the writable per-user template directory."""
+    import shutil
+
+    source_dir = Path(__file__).resolve().parent / "assets" / "state_templates"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    installed: dict[str, dict] = {}
+    for signal, (_category, label, threshold) in OKWW_SIGNAL_CATEGORIES.items():
+        source = template_path(source_dir, signal)
+        ratio = BUNDLED_SIGNAL_ROIS.get(signal)
+        if not source.exists() or not ratio:
+            continue
+        destination = template_path(templates_dir, signal)
+        if not destination.exists():
+            shutil.copy2(source, destination)
+        installed[signal] = {
+            "label": label,
+            "enabled": True,
+            "threshold": threshold,
+            "roi_ratio": list(ratio),
+            "source": "bundled OK-WW template",
+        }
+    return installed
 
 
 def _find_okww_repo(root: Path) -> Path:

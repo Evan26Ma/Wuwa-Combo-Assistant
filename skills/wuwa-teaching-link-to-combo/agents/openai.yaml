@@ -1,0 +1,4 @@
+interface:
+  display_name: "鸣潮教学链接转逐键轴"
+  short_description: "分析鸣潮教学视频链接并生成启动轴、循环轴、识图锚点与完整测试"
+  default_prompt: "Use $wuwa-teaching-link-to-combo to analyze this 鸣潮教学链接 and implement its startup and loop combo cues."

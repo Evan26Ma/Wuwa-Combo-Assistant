@@ -8,6 +8,7 @@ from wuwa_assistant.vision import (
     image_similarity,
     import_okww_portraits,
     import_okww_templates,
+    install_bundled_state_templates,
     state_image_similarity,
     template_path,
 )
@@ -80,6 +81,15 @@ def test_all_team_portraits_are_bundled():
     for path in portraits.values():
         with Image.open(path) as portrait:
             assert portrait.size == (192, 192)
+
+
+def test_all_okww_state_templates_are_bundled(tmp_path):
+    installed = install_bundled_state_templates(tmp_path / "templates")
+    assert len(installed) == 12
+    assert "character:夏空" in installed
+    assert "cartethyia:lib_big" in installed
+    assert "suisui:forte3" in installed
+    assert all(template_path(tmp_path / "templates", signal).exists() for signal in installed)
 
 
 def test_state_roi_scales_to_selected_monitor():
