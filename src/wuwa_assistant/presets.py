@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from itertools import count
 
+from .advice import operation_advice
 from .models import ComboPreset, Cue
 
 
@@ -75,6 +76,7 @@ class PresetBuilder:
                 "anchor": bool(anchor_first and idx == 0 and action.startswith("slot")),
                 "hold_ms": 420 if action == "heavy" else 0,
                 "vision_signal": f"character:{character}" if action.startswith("slot") else "",
+                "advice": operation_advice(character, action),
             }
             data.update(overrides.get(idx, {}))
             self.cues.append(Cue(

@@ -48,3 +48,12 @@ def test_attack_notation_uses_a_and_z():
     labels = {cue.action: cue.display_key for preset in load_builtin_presets() for cue in preset.cues}
     assert labels["basic"] == "A"
     assert labels["heavy"] == "Z"
+
+
+def test_okww_operation_advice_is_mapped_to_relevant_cues():
+    cues = [cue for preset in load_builtin_presets() for cue in preset.cues]
+    assert any(cue.character == "卡提希娅" and cue.action == "heavy" and "第一把剑" in cue.advice for cue in cues)
+    assert any(cue.character == "穗穗" and cue.action == "liberation" and "Forte3" in cue.advice for cue in cues)
+    assert any(cue.character == "秧秧" and cue.action == "skill" and "优先 R" in cue.advice for cue in cues)
+    assert any(cue.character == "千咲" and cue.action == "echo" and "支援态" in cue.advice for cue in cues)
+    assert any(cue.character == "夏空" and cue.action == "heavy" and "三格" in cue.advice for cue in cues)

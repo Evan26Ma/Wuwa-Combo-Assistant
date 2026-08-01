@@ -323,6 +323,8 @@ class DashboardApp:
             text_widget.tag_configure("segment", foreground="#BFAAFF", font=("Microsoft YaHei UI", 10, "bold"), spacing1=10, spacing3=4)
             text_widget.tag_configure("step", foreground=C["dim"], font=("Segoe UI", 9, "normal"))
             text_widget.tag_configure("key", foreground=C["text"], font=("Microsoft YaHei UI", 11, "bold"))
+            text_widget.tag_configure("condition", foreground="#C7CFDD", font=("Microsoft YaHei UI", 9, "normal"), lmargin1=34, lmargin2=34)
+            text_widget.tag_configure("advice", foreground=C["green"], font=("Microsoft YaHei UI", 9, "normal"), lmargin1=34, lmargin2=34, spacing3=5)
             scrollbar.config(command=text_widget.yview)
             self.axis_texts.append(text_widget)
         self._refresh_axis_page()
@@ -462,6 +464,8 @@ class DashboardApp:
         self.condition_title.pack(pady=(5, 7))
         self.condition_label = _label(card, "程序会根据你的实际按键自动推进", size=11, color="#C7CFDD", wraplength=620, justify="center")
         self.condition_label.pack(padx=26, pady=(0, 10))
+        self.advice_label = _label(card, "", size=9, color=C["green"], wraplength=650, justify="center")
+        self.advice_label.pack(padx=26, pady=(0, 8))
         self.segment_label = _label(card, "", size=9, color=C["purple"])
         self.segment_label.pack(pady=(0, 14))
 
@@ -761,6 +765,9 @@ class DashboardApp:
             text_widget.insert("end", f"{index:02d}  ", "step")
             text_widget.insert("end", f"{cue.display_key}", "key")
             text_widget.insert("end", f"    {cue.character}\n")
+            text_widget.insert("end", f"操作：{cue.condition}\n", "condition")
+            if cue.advice:
+                text_widget.insert("end", f"OK-WW 建议：{cue.advice}\n", "advice")
 
     def _restart_monitors(self) -> None:
         if self.input_monitor:
@@ -854,6 +861,7 @@ class DashboardApp:
             self.key_label.config(text="✓", fg=C["green"], font=("Segoe UI", 38, "bold"))
             self.condition_title.config(text="本轮完成")
             self.condition_label.config(text="等待重置或选择另一支队伍")
+            self.advice_label.config(text="")
             self.segment_label.config(text="")
         else:
             size = 38 if len(cue.display_key) <= 2 else 29 if len(cue.display_key) == 3 else 23
@@ -861,7 +869,8 @@ class DashboardApp:
             self.condition_title.config(text=cue.segment)
             hint = self._state_vision_hint(cue)
             suffix = f"  ·  {hint}" if hint else ""
-            self.condition_label.config(text=f"当前角色：{cue.character}  ·  识别后自动进入下一步{suffix}")
+            self.condition_label.config(text=f"操作：{cue.condition}{suffix}")
+            self.advice_label.config(text=f"OK-WW 建议：{cue.advice}" if cue.advice else "")
             self.segment_label.config(text=f"第 {view.index + 1} / {view.total} 步")
         self.phase_label.config(text="启动轴（仅一次）" if view.phase == "启动" else f"自动循环中  ·  第 {max(1, view.cycle_count)} 轮")
         self.cycle_label.config(text="启动阶段" if view.phase == "启动" else f"第 {max(1, view.cycle_count)} 轮 / ∞")

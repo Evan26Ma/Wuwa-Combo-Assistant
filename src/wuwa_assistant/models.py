@@ -27,6 +27,7 @@ class Cue:
     anchor: bool = False
     hold_ms: int = 0
     vision_signal: str = ""
+    advice: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
