@@ -40,3 +40,20 @@ def test_inactive_monitor_releases_state_without_emitting():
     monitor.poll_once(now=1.0, active=False)
     assert events == []
 
+
+def test_both_reset_keys_are_observed_independently():
+    states = {VK_CODES["ESC"]: False, VK_CODES["F8"]: False}
+    events = []
+    monitor = InputMonitor(
+        {"reset_primary": "ESC", "reset_secondary": "F8"},
+        events.append,
+        state_reader=lambda vk: states[vk],
+    )
+    monitor.poll_once(now=1.0)
+    states[VK_CODES["ESC"]] = True
+    monitor.poll_once(now=1.1)
+    states[VK_CODES["ESC"]] = False
+    monitor.poll_once(now=1.2)
+    states[VK_CODES["F8"]] = True
+    monitor.poll_once(now=1.3)
+    assert [event.action for event in events] == ["reset_primary", "reset_secondary"]

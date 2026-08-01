@@ -31,6 +31,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "slot1": "1",
         "slot2": "2",
         "slot3": "3",
+        "reset_primary": "ESC",
+        "reset_secondary": "F8",
     },
     "heavy_hold_ms": 360,
     "poll_interval_ms": 8,

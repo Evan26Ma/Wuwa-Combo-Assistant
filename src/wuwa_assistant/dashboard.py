@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw, ImageTk
 from .engine import ComboEngine
 from .foreground import enumerate_window_titles, is_game_foreground
 from .input_monitor import InputMonitor, VK_CODES
-from .models import ComboPreset, Cue, EngineView
+from .models import ComboPreset, Cue, EngineView, InputEvent
 from .settings import SettingsStore
 from .vision import (
     OKWW_SIGNAL_CATEGORIES,
@@ -592,6 +592,8 @@ class DashboardApp:
             ("jump", "跳跃"), ("dodge", "闪避"),
             ("forward", "前进"), ("slot1", "队伍槽位 1"),
             ("slot2", "队伍槽位 2"), ("slot3", "队伍槽位 3"),
+            ("reset_primary", "重置连招（主键）"),
+            ("reset_secondary", "重置连招（备用）"),
         )
         self.key_vars: dict[str, tk.StringVar] = {}
         choices = sorted(VK_CODES, key=lambda value: (len(value), value))
@@ -844,7 +846,7 @@ class DashboardApp:
             self.team_vision_monitor.stop()
         enabled = lambda: (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))
         self.input_monitor = InputMonitor(
-            self.settings["keymap"], self.engine.process,
+            self.settings["keymap"], self._handle_input_event,
             heavy_hold_ms=int(self.settings.get("heavy_hold_ms", 360)),
             poll_interval_ms=int(self.settings.get("poll_interval_ms", 8)), enabled=enabled,
         )
@@ -873,6 +875,12 @@ class DashboardApp:
         )
         if self.settings.get("vision_enabled"):
             self.team_vision_monitor.start()
+
+    def _handle_input_event(self, event: InputEvent) -> None:
+        if event.action in {"reset_primary", "reset_secondary"}:
+            self.events.put(("command", "reset"))
+            return
+        self.engine.process(event)
 
     def _ui_loop(self) -> None:
         active = (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))

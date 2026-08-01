@@ -17,6 +17,7 @@ VK_CODES = {
     "SHIFT": 0x10,
     "CTRL": 0x11,
     "ALT": 0x12,
+    "ESC": 0x1B,
     "SPACE": 0x20,
     **{str(i): 0x30 + i for i in range(10)},
     **{chr(ord("A") + i): 0x41 + i for i in range(26)},

@@ -10,6 +10,8 @@ def test_settings_merge_defaults_and_roundtrip(tmp_path):
     assert settings["opacity"] == 0.8
     assert settings["keymap"]["skill"] == "G"
     assert settings["keymap"]["basic"] == "MOUSE_LEFT"
+    assert settings["keymap"]["reset_primary"] == "ESC"
+    assert settings["keymap"]["reset_secondary"] == "F8"
     store.save(settings)
     assert store.load() == settings
 
@@ -18,4 +20,3 @@ def test_export_presets(tmp_path):
     store = SettingsStore(tmp_path)
     path = store.export_presets([{"id": "one"}])
     assert json.loads(path.read_text(encoding="utf-8")) == [{"id": "one"}]
-
