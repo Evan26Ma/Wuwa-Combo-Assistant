@@ -88,18 +88,16 @@ class ComboEngine:
                 return
             self._history.append(event)
             cue = self.cue
-            elapsed_ms = int((event.timestamp - self.cue_started_at) * 1000)
             if event.action == cue.action:
                 if cue.hold_ms and event.held_ms < cue.hold_ms:
                     self.message = f"长按不足：需要约 {cue.hold_ms}ms"
                     self.confidence = 0.72
                     self._emit(event.timestamp)
                     return
-                timing = "过早" if elapsed_ms < cue.earliest_ms else "偏晚" if elapsed_ms > cue.latest_ms else "准确"
                 self.index += 1
                 self.cue_started_at = event.timestamp
-                self.confidence = 1.0 if timing == "准确" else 0.88
-                self.message = f"{timing} · 已识别 {cue.display_key}"
+                self.confidence = 1.0
+                self.message = f"已识别 {cue.display_key}"
                 if self.index >= len(self.preset.cues):
                     self._advance_phase(event.timestamp)
                 self._emit(event.timestamp)
@@ -180,12 +178,7 @@ class ComboEngine:
             return "PAUSED"
         if cue is None:
             return "DONE"
-        elapsed = int(((now or time.perf_counter()) - self.cue_started_at) * 1000)
-        if elapsed < cue.earliest_ms:
-            return "WAIT"
-        if elapsed <= cue.latest_ms:
-            return "READY"
-        return "LATE"
+        return "READY"
 
     def view(self, now: float | None = None) -> EngineView:
         now = now or time.perf_counter()

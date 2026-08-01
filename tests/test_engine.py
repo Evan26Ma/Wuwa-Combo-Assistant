@@ -15,12 +15,12 @@ def preset(*cues: Cue) -> ComboPreset:
     return ComboPreset("test", "测试轴", ("甲", "乙", "丙"), "启动", 1000, "", "", cues)
 
 
-def test_correct_input_advances_even_when_early_without_extra_hotkey():
+def test_correct_input_advances_without_timing_judgement():
     engine = ComboEngine((preset(cue(1, "skill"), cue(2, "basic")),))
     engine.cue_started_at = 10.0
     engine.process(InputEvent("skill", 10.05))
     assert engine.index == 1
-    assert "过早" in engine.message
+    assert engine.message == "已识别 skill"
 
 
 def test_wrong_input_keeps_current_step():

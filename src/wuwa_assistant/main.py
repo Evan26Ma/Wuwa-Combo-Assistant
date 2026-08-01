@@ -6,7 +6,7 @@ import tkinter as tk
 
 from .presets import load_builtin_presets
 from .settings import SettingsStore
-from .ui import OverlayApp
+from .dashboard import DashboardApp
 
 
 def configure_dpi() -> None:
@@ -29,11 +29,10 @@ def main() -> int:
     store = SettingsStore()
     settings = store.load()
     root = tk.Tk()
-    OverlayApp(root, store, settings, load_builtin_presets())
+    DashboardApp(root, store, settings, load_builtin_presets())
     root.mainloop()
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
