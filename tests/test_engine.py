@@ -63,6 +63,15 @@ def test_ambiguous_anchor_does_not_jump():
     assert engine.index == 0
 
 
+def test_visual_character_observation_strengthens_anchor_match():
+    combo = preset(cue(1, "basic", character="甲"), cue(2, "skill", anchor=True, character="乙"))
+    engine = ComboEngine((combo,))
+    engine.observe_character("乙")
+    engine.process(InputEvent("skill", engine.cue_started_at + 0.2))
+    assert engine.index == 2
+    assert "已恢复" in engine.message
+
+
 def test_startup_automatically_enters_and_repeats_cycle():
     startup = ComboPreset(
         "team-startup", "队伍 · 启动轴", ("甲", "乙", "丙"), "启动", 1000,

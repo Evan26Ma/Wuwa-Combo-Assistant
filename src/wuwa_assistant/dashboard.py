@@ -4,6 +4,7 @@ import queue
 import threading
 import tkinter as tk
 from dataclasses import asdict
+from pathlib import Path
 from tkinter import ttk
 
 from PIL import Image, ImageDraw
@@ -13,7 +14,7 @@ from .foreground import enumerate_window_titles, is_game_foreground
 from .input_monitor import InputMonitor, VK_CODES
 from .models import ComboPreset, Cue, EngineView
 from .settings import SettingsStore
-from .vision import VisionMonitor
+from .vision import OKWW_SIGNAL_CATEGORIES, StateVisionMonitor, VisionMonitor, import_okww_templates
 
 
 C = {
@@ -64,8 +65,10 @@ class DashboardApp:
         self.engine = ComboEngine(self.presets, lambda view: self.events.put(("view", view)))
         self.input_monitor: InputMonitor | None = None
         self.vision_monitor: VisionMonitor | None = None
+        self.state_vision_monitor: StateVisionMonitor | None = None
         self.vision_signal = ""
         self.vision_score = -1.0
+        self.state_vision_scores: dict[str, tuple[float, bool]] = {}
         self.force_visible = True
         self._tray = None
         self._drag_origin: tuple[int, int] | None = None
@@ -82,6 +85,7 @@ class DashboardApp:
 
         self._build_window()
         self._build_battle_overlay()
+        self._auto_import_okww_templates()
         self._select_initial_preset()
         self._restart_monitors()
         self._start_tray()
@@ -429,7 +433,7 @@ class DashboardApp:
         card = self._card(parent)
         _label(card, "识别状态", size=12, weight="bold", anchor="w").pack(fill="x", padx=20, pady=(16, 8))
         self.recognition_rows: list[tuple[tk.Label, tk.Label]] = []
-        for text in ("按键序列匹配", "长按输入判定", "锚点同步状态"):
+        for text in ("按键序列匹配", "长按输入判定", "锚点同步状态", "角色 HUD 增强"):
             row = tk.Frame(card, bg=C["panel"])
             row.pack(fill="x", padx=20, pady=5)
             name = _label(row, text, size=10, color="#D2D8E4", anchor="w")
@@ -585,16 +589,27 @@ class DashboardApp:
         self._button(threshold, "保存识别设置", self._save_vision, primary=True).pack(side="right")
 
         capture = self._section(parent)
-        _label(capture, "采集角色 / HUD 模板", size=13, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(20, 4))
-        _label(capture, "先把识别区域对准稳定 HUD，再选择当前角色并采集。模板只保存在本机。", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=22, pady=(0, 14))
+        _label(capture, "角色 / HUD 模板", size=13, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(16, 3))
+        _label(capture, "可手动采集当前 ROI，也可从本机 OK-WW 标注导入卡提希娅与穗穗状态模板。", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=22, pady=(0, 10))
         row = tk.Frame(capture, bg=C["panel"])
-        row.pack(fill="x", padx=22, pady=(0, 20))
+        row.pack(fill="x", padx=22, pady=(0, 10))
         characters = sorted({character for preset in self.presets for character in preset.team})
         self.template_character_var = tk.StringVar(value=characters[0] if characters else "当前角色")
         ttk.Combobox(row, textvariable=self.template_character_var, values=characters, state="readonly", width=20, style="Dark.TCombobox").pack(side="left", ipady=5)
-        self._button(row, "采集当前区域", self._capture_template, primary=True).pack(side="left", padx=12)
+        self._button(row, "手动采集当前 ROI", self._capture_template).pack(side="left", padx=12)
         self.vision_status = _label(row, "未采集", size=9, color=C["muted"], anchor="w")
         self.vision_status.pack(side="left", fill="x", expand=True)
+
+        okww = tk.Frame(capture, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
+        okww.pack(fill="x", padx=22, pady=(0, 16))
+        self.state_vision_enabled_var = tk.BooleanVar(value=bool(self.settings.get("state_vision", {}).get("enabled", False)))
+        tk.Checkbutton(okww, variable=self.state_vision_enabled_var, bg=C["panel_alt"], activebackground=C["panel_alt"], selectcolor=C["purple2"], bd=0, highlightthickness=0).pack(side="left", padx=(12, 5))
+        _label(okww, "OK-WW HUD 增强", size=9, weight="bold", bg=C["panel_alt"]).pack(side="left", padx=(0, 10))
+        self.okww_path_var = tk.StringVar(value=str(self.settings.get("state_vision", {}).get("okww_path", "F:\\Tools\\okww")))
+        tk.Entry(okww, textvariable=self.okww_path_var, bg=C["panel"], fg=C["text"], insertbackground="white", relief="flat", highlightthickness=1, highlightbackground=C["border"], font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True, ipady=6, padx=(0, 10), pady=10)
+        self._button(okww, "导入本机模板", self._import_okww_templates, primary=True).pack(side="left", padx=(0, 10), pady=8)
+        self.okww_status = _label(okww, self._okww_status_text(), size=8, color=C["muted"], bg=C["panel_alt"], width=16)
+        self.okww_status.pack(side="right", padx=(0, 10))
 
     def _build_help_page(self, parent: tk.Frame) -> None:
         self._page_header(parent, "使用帮助", "不需要额外脚本热键，进入战斗后按你原本的方式操作")
@@ -685,6 +700,8 @@ class DashboardApp:
             self.input_monitor.stop()
         if self.vision_monitor:
             self.vision_monitor.stop()
+        if self.state_vision_monitor:
+            self.state_vision_monitor.stop()
         enabled = lambda: (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))
         self.input_monitor = InputMonitor(
             self.settings["keymap"], self.engine.process,
@@ -699,6 +716,13 @@ class DashboardApp:
         )
         if self.settings.get("vision_enabled"):
             self.vision_monitor.start()
+        self.state_vision_monitor = StateVisionMonitor(
+            self.store.templates_dir, self.settings,
+            callback=lambda signal, score, matched: self.events.put(("state_vision", (signal, score, matched))),
+            enabled=enabled,
+        )
+        if self.settings.get("vision_enabled") and self.settings.get("state_vision", {}).get("enabled"):
+            self.state_vision_monitor.start()
 
     def _ui_loop(self) -> None:
         active = (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))
@@ -723,6 +747,18 @@ class DashboardApp:
                 break
             if kind == "vision":
                 self.vision_signal, self.vision_score = payload  # type: ignore[misc]
+            elif kind == "state_vision":
+                signal, score, matched = payload  # type: ignore[misc]
+                self.state_vision_scores[str(signal)] = (float(score), bool(matched))
+                if matched and str(signal).startswith("character:"):
+                    self.engine.observe_character(str(signal).split(":", 1)[1])
+                elif matched and str(signal).startswith("cartethyia:"):
+                    self.engine.observe_character("卡提希娅")
+                elif matched and str(signal) == "suisui:forte3":
+                    self.engine.observe_character("穗穗")
+                if hasattr(self, "okww_status"):
+                    any_match = any(active for _value, active in self.state_vision_scores.values())
+                    self.okww_status.config(text=self._okww_status_text(), fg=C["green"] if any_match else C["muted"], width=16)
             elif kind == "command":
                 command = str(payload)
                 if command == "show": self.show_overlay()
@@ -756,16 +792,34 @@ class DashboardApp:
             size = 38 if len(cue.display_key) <= 2 else 29 if len(cue.display_key) == 3 else 23
             self.key_label.config(text=cue.display_key, fg=C["text"], font=("Microsoft YaHei UI", size, "bold"))
             self.condition_title.config(text=cue.segment)
-            self.condition_label.config(text=f"当前角色：{cue.character}  ·  识别后自动进入下一步")
+            hint = self._state_vision_hint(cue)
+            suffix = f"  ·  {hint}" if hint else ""
+            self.condition_label.config(text=f"当前角色：{cue.character}  ·  识别后自动进入下一步{suffix}")
             self.segment_label.config(text=f"第 {view.index + 1} / {view.total} 步")
         self.phase_label.config(text="启动轴（仅一次）" if view.phase == "启动" else f"自动循环中  ·  第 {max(1, view.cycle_count)} 轮")
         self.cycle_label.config(text="启动阶段" if view.phase == "启动" else f"第 {max(1, view.cycle_count)} 轮 / ∞")
         self.recognition_rows[0][1].config(fg=C["green"] if view.confidence >= .7 else C["gold"])
         self.recognition_rows[1][1].config(fg=C["green"] if cue and cue.hold_ms else C["dim"])
         self.recognition_rows[2][1].config(fg=C["green"] if view.confidence >= .7 else C["gold"])
+        has_state_match = any(matched for _score, matched in self.state_vision_scores.values())
+        self.recognition_rows[3][1].config(fg=C["green"] if has_state_match else C["dim"])
         self._update_preview(view)
         self._draw_sequence(view)
         self._draw_battle_overlay(view)
+
+    def _state_vision_hint(self, cue: Cue) -> str:
+        matched = {signal for signal, (_score, active) in self.state_vision_scores.items() if active}
+        if cue.character == "卡提希娅":
+            if "cartethyia:lib_big" in matched:
+                return "画面确认：终结 R 可用"
+            if "cartethyia:mid_air" in matched:
+                return "画面确认：空中攻击可用"
+            swords = sum(f"cartethyia:sword{index}" in matched for index in range(1, 4))
+            if "cartethyia:small" in matched or swords:
+                return f"画面确认：小卡提 · 已识别 {swords}/3 剑"
+        if cue.character == "穗穗" and "suisui:forte3" in matched:
+            return "画面确认：Forte3 已满"
+        return ""
 
     def _draw_battle_overlay(self, view: EngineView) -> None:
         canvas = self.float_canvas
@@ -940,6 +994,9 @@ class DashboardApp:
         vision["roi"] = {name: max(0 if name in {"left", "top"} else 1, int(variable.get())) for name, variable in self.roi_vars.items()}
         vision["match_threshold"] = max(.60, min(.98, float(self.threshold_var.get())))
         self.settings["vision_enabled"] = bool(self.vision_enabled_var.get())
+        state = self.settings.setdefault("state_vision", {})
+        state["enabled"] = bool(self.state_vision_enabled_var.get())
+        state["okww_path"] = self.okww_path_var.get().strip()
 
     def _save_vision(self) -> None:
         self._apply_vision_form()
@@ -958,6 +1015,48 @@ class DashboardApp:
             self.vision_status.config(text=f"✓ 已保存：{path.name}", fg=C["green"])
         except Exception as exc:
             self.vision_status.config(text=f"采集失败：{exc}", fg=C["red"])
+
+    def _okww_status_text(self) -> str:
+        signals = self.settings.get("state_vision", {}).get("signals", {})
+        imported = sum(1 for signal in OKWW_SIGNAL_CATEGORIES if signals.get(signal, {}).get("enabled"))
+        matched = sum(1 for signal, (_score, active) in self.state_vision_scores.items() if signal in OKWW_SIGNAL_CATEGORIES and active)
+        return f"命中 {matched} / 已导入 {imported}"
+
+    def _import_okww_templates(self) -> None:
+        try:
+            imported = import_okww_templates(Path(self.okww_path_var.get().strip()), self.store.templates_dir)
+            state = self.settings.setdefault("state_vision", {})
+            state["signals"] = imported
+            state["enabled"] = True
+            state["okww_path"] = self.okww_path_var.get().strip()
+            self.state_vision_enabled_var.set(True)
+            self.settings["vision_enabled"] = True
+            self.vision_enabled_var.set(True)
+            self.store.save(self.settings)
+            self._restart_monitors()
+            self.okww_status.config(text=f"✓ 已导入 {len(imported)} 项", fg=C["green"])
+        except Exception as exc:
+            self.okww_status.config(text=f"导入失败：{exc}", fg=C["red"], width=34)
+
+    def _auto_import_okww_templates(self) -> None:
+        state = self.settings.setdefault("state_vision", {})
+        if state.get("signals"):
+            return
+        root = Path(str(state.get("okww_path", "F:\\Tools\\okww")))
+        if not root.exists():
+            return
+        try:
+            imported = import_okww_templates(root, self.store.templates_dir)
+        except (OSError, ValueError):
+            return
+        state["signals"] = imported
+        state["enabled"] = True
+        self.settings["vision_enabled"] = True
+        if hasattr(self, "state_vision_enabled_var"):
+            self.state_vision_enabled_var.set(True)
+            self.vision_enabled_var.set(True)
+            self.okww_status.config(text=f"✓ 自动导入 {len(imported)} 项", fg=C["green"])
+        self.store.save(self.settings)
 
     def _open_data_dir(self) -> None:
         self.store.root.mkdir(parents=True, exist_ok=True)
@@ -1065,6 +1164,8 @@ class DashboardApp:
             self.input_monitor.stop()
         if self.vision_monitor:
             self.vision_monitor.stop()
+        if self.state_vision_monitor:
+            self.state_vision_monitor.stop()
         if self._tray:
             self._tray.stop()
         self.store.save(self.settings)

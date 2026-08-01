@@ -23,6 +23,8 @@ class ComboEngine:
         self.message = "等待你的实际游戏输入"
         self.confidence = 1.0
         self._history: deque[InputEvent] = deque(maxlen=10)
+        self._vision_character = ""
+        self._vision_character_at = -1.0
         self._on_change = on_change
         self._lock = threading.RLock()
 
@@ -81,6 +83,12 @@ class ComboEngine:
             self.cue_started_at = time.perf_counter()
             self.message = "正在监听游戏输入" if active else "游戏未在前台，已暂停"
             self._emit()
+
+    def observe_character(self, character: str, timestamp: float | None = None) -> None:
+        """Accept a soft visual observation for anchor scoring only."""
+        with self._lock:
+            self._vision_character = character
+            self._vision_character_at = timestamp if timestamp is not None else time.perf_counter()
 
     def process(self, event: InputEvent) -> None:
         with self._lock:
@@ -161,6 +169,8 @@ class ComboEngine:
         return True
 
     def _observed_character(self) -> str:
+        if self._vision_character and time.perf_counter() - self._vision_character_at <= 2.0:
+            return self._vision_character
         role_by_action = {
             "slot1": self.preset.team[0],
             "slot2": self.preset.team[1],
