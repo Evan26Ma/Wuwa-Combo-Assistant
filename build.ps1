@@ -19,6 +19,7 @@ python -m PyInstaller `
   --windowed `
   --name '鸣潮逐键教练' `
   --paths (Join-Path $ProjectRoot 'src') `
+  --add-data "$(Join-Path $ProjectRoot 'src\wuwa_assistant\assets');wuwa_assistant/assets" `
   --workpath (Join-Path $BuildRoot 'work') `
   --specpath (Join-Path $BuildRoot 'spec') `
   --distpath (Join-Path $ProjectRoot 'dist') `

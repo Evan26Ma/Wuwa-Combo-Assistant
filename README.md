@@ -27,7 +27,7 @@
 
 如果本机安装了 OK-WW，可在“画面识别”页填写其安装目录并导入卡提希娅三剑、空中攻击、终结大招和穗穗 Forte3 标注。程序只从本机裁切模板到 `%APPDATA%`，不会将 OK-WW 的 AGPL-3.0 图片资源打包进本仓库或 EXE；识别结果仅用于提示和锚点评分。
 
-控制台还会从同一本机安装中提取卡提希娅、夏空、千咲、秧秧和穗穗的 HUD 头像，用于队伍卡片和队伍选择页。头像缓存位于 `%APPDATA%\WuwaComboAssistant\okww-assets`；找不到 OK-WW 时会自动使用文字占位，不影响按键辅助。
+控制台已内置卡提希娅、夏空、千咲、秧秧和穗穗的 HUD 头像，用于队伍卡片和队伍选择页，无需安装 OK-WW。若本机存在 OK-WW，程序仍会把重新提取的头像缓存到 `%APPDATA%\WuwaComboAssistant\okww-assets` 并优先使用。素材来源和许可见 [`src/wuwa_assistant/assets/portraits/README.md`](src/wuwa_assistant/assets/portraits/README.md)。
 
 ## 从源码运行
 

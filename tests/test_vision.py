@@ -4,6 +4,7 @@ from PIL import Image
 
 from wuwa_assistant.vision import (
     StateVisionMonitor,
+    bundled_portrait_paths,
     image_similarity,
     import_okww_portraits,
     import_okww_templates,
@@ -71,6 +72,14 @@ def test_import_okww_portraits_selects_largest_square_crop(tmp_path):
     assert set(imported) == {"卡提希娅"}
     with Image.open(imported["卡提希娅"]) as portrait:
         assert portrait.size == (192, 192)
+
+
+def test_all_team_portraits_are_bundled():
+    portraits = bundled_portrait_paths()
+    assert set(portraits) == {"卡提希娅", "夏空", "千咲", "秧秧", "穗穗"}
+    for path in portraits.values():
+        with Image.open(path) as portrait:
+            assert portrait.size == (192, 192)
 
 
 def test_state_roi_scales_to_selected_monitor():

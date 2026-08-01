@@ -18,6 +18,7 @@ from .vision import (
     OKWW_SIGNAL_CATEGORIES,
     StateVisionMonitor,
     VisionMonitor,
+    bundled_portrait_paths,
     import_okww_portraits,
     import_okww_templates,
 )
@@ -1131,14 +1132,15 @@ class DashboardApp:
         self.store.save(self.settings)
 
     def _auto_import_okww_portraits(self) -> None:
+        self.character_asset_paths = bundled_portrait_paths()
         state = self.settings.setdefault("state_vision", {})
         root = Path(str(state.get("okww_path", "F:\\Tools\\okww")))
         if not root.exists():
             return
         try:
-            self.character_asset_paths = import_okww_portraits(root, self.store.assets_dir)
+            self.character_asset_paths.update(import_okww_portraits(root, self.store.assets_dir))
         except (OSError, ValueError):
-            self.character_asset_paths = {}
+            pass
 
     def _open_data_dir(self) -> None:
         self.store.root.mkdir(parents=True, exist_ok=True)

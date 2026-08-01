@@ -30,6 +30,14 @@ OKWW_PORTRAIT_CATEGORIES = {
     "穗穗": "char_suisui",
 }
 
+BUNDLED_PORTRAIT_FILES = {
+    "卡提希娅": "cartethyia.png",
+    "夏空": "ciaccona.png",
+    "千咲": "chisa.png",
+    "秧秧": "yangyang-sp.png",
+    "穗穗": "suisui.png",
+}
+
 
 def _safe_name(signal: str) -> str:
     digest = hashlib.sha1(signal.encode("utf-8")).hexdigest()[:12]
@@ -38,6 +46,15 @@ def _safe_name(signal: str) -> str:
 
 def template_path(templates_dir: Path, signal: str) -> Path:
     return templates_dir / _safe_name(signal)
+
+
+def bundled_portrait_paths() -> dict[str, Path]:
+    directory = Path(__file__).resolve().parent / "assets" / "portraits"
+    return {
+        name: directory / filename
+        for name, filename in BUNDLED_PORTRAIT_FILES.items()
+        if (directory / filename).exists()
+    }
 
 
 def _find_okww_repo(root: Path) -> Path:
