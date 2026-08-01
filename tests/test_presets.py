@@ -42,3 +42,9 @@ def test_landing_and_q_dodge_r_cues_are_present():
     assert "下落" in text
     assert "落地" in text
     assert "Q 后立刻闪接 R" in text or "Q 闪接 R" in text
+
+
+def test_attack_notation_uses_a_and_z():
+    labels = {cue.action: cue.display_key for preset in load_builtin_presets() for cue in preset.cues}
+    assert labels["basic"] == "A"
+    assert labels["heavy"] == "Z"

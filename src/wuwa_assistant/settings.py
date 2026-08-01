@@ -16,7 +16,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "scale": 1.0,
     "sound_enabled": False,
     "vision_enabled": True,
-    "overlay": {"x": None, "y": 56},
+    "overlay": {"enabled": True, "x": None, "y": 72},
     "keymap": {
         "basic": "MOUSE_LEFT",
         "heavy": "MOUSE_LEFT",

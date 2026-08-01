@@ -69,6 +69,7 @@ class DashboardApp:
         self.force_visible = True
         self._tray = None
         self._drag_origin: tuple[int, int] | None = None
+        self._overlay_drag_origin: tuple[int, int] | None = None
         self._last_rendered_index = -1
         self._last_active: bool | None = None
         self._team_cards: dict[str, tk.Frame] = {}
@@ -80,6 +81,7 @@ class DashboardApp:
         self._restore_geometry = ""
 
         self._build_window()
+        self._build_battle_overlay()
         self._select_initial_preset()
         self._restart_monitors()
         self._start_tray()
@@ -120,10 +122,56 @@ class DashboardApp:
         self.context_menu.add_command(label="下一步（调试）", command=lambda: self.engine.step(1))
         self.context_menu.add_command(label="从启动轴重新开始", command=self.engine.reset)
         self.context_menu.add_separator()
+        self.context_menu.add_command(label="显示 / 隐藏战斗悬浮提示", command=self._toggle_battle_overlay_enabled)
         self.context_menu.add_command(label="设置", command=self.open_settings)
         self.context_menu.add_command(label="隐藏到托盘", command=self.hide_overlay)
         self.context_menu.add_command(label="退出", command=self.shutdown)
         shell.bind("<Button-3>", self._show_context_menu)
+
+    def _build_battle_overlay(self) -> None:
+        """Create a transparent, non-activating combat-only key prompt."""
+        transparent = "#010203"
+        self.battle_overlay = tk.Toplevel(self.root)
+        self.battle_overlay.title("鸣潮逐键提示")
+        self.battle_overlay.overrideredirect(True)
+        self.battle_overlay.attributes("-topmost", True)
+        self.battle_overlay.configure(bg=transparent)
+        try:
+            self.battle_overlay.attributes("-transparentcolor", transparent)
+        except tk.TclError:
+            self.battle_overlay.attributes("-alpha", .92)
+
+        width, height = 330, 116
+        overlay_settings = self.settings.get("overlay", {})
+        x = overlay_settings.get("x")
+        if x is None:
+            x = self.root.winfo_screenwidth() - width - 48
+        y = int(overlay_settings.get("y", 72))
+        self.battle_overlay.geometry(f"{width}x{height}+{max(0, int(x))}+{max(0, y)}")
+
+        self.float_canvas = tk.Canvas(
+            self.battle_overlay, width=width, height=height, bg=transparent,
+            highlightthickness=0, bd=0, cursor="fleur",
+        )
+        self.float_canvas.pack(fill="both", expand=True)
+        self.float_canvas.bind("<ButtonPress-1>", self._start_overlay_drag)
+        self.float_canvas.bind("<B1-Motion>", self._drag_overlay)
+        self.float_canvas.bind("<ButtonRelease-1>", self._end_overlay_drag)
+        self.float_canvas.bind("<Button-3>", self._show_context_menu)
+        self.battle_overlay.update_idletasks()
+        self._make_overlay_no_activate()
+        self.battle_overlay.withdraw()
+
+    def _make_overlay_no_activate(self) -> None:
+        try:
+            import ctypes
+            hwnd = self.battle_overlay.winfo_id()
+            get_style = ctypes.windll.user32.GetWindowLongW
+            set_style = ctypes.windll.user32.SetWindowLongW
+            style = get_style(hwnd, -20)
+            set_style(hwnd, -20, style | 0x08000000 | 0x00000080)
+        except Exception:
+            pass
 
     def _build_header(self, parent: tk.Frame) -> None:
         header = tk.Frame(parent, bg=C["bg"], height=106)
@@ -444,6 +492,8 @@ class DashboardApp:
         _label(general, "监听与反馈", size=13, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(20, 10))
         self.only_game_var = tk.BooleanVar(value=bool(self.settings.get("only_when_game_active", True)))
         self.sound_var = tk.BooleanVar(value=bool(self.settings.get("sound_enabled", False)))
+        self.overlay_enabled_var = tk.BooleanVar(value=bool(self.settings.get("overlay", {}).get("enabled", True)))
+        self._check(general, "显示透明战斗悬浮提示", self.overlay_enabled_var, "仅显示当前角色和下一按键，不显示时间或复杂状态").pack(fill="x", padx=22, pady=6)
         self._check(general, "仅在鸣潮位于前台时监听", self.only_game_var, "切出游戏后自动暂停，避免把日常键盘操作当作连招").pack(fill="x", padx=22, pady=6)
         self._check(general, "每次正确推进时播放提示音", self.sound_var, "默认关闭；不会播放语音或持续音效").pack(fill="x", padx=22, pady=6)
         alpha = tk.Frame(general, bg=C["panel"])
@@ -580,6 +630,13 @@ class DashboardApp:
         active = (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))
         self.engine.set_active(active)
         self._last_active = active
+        overlay_enabled = bool(self.settings.get("overlay", {}).get("enabled", True))
+        if active and overlay_enabled:
+            if self.battle_overlay.state() == "withdrawn":
+                self.battle_overlay.deiconify()
+                self.battle_overlay.attributes("-topmost", True)
+        elif self.battle_overlay.state() != "withdrawn":
+            self.battle_overlay.withdraw()
         unrestricted = not self.settings.get("only_when_game_active", True)
         self.foreground_pill.config(
             text="●  全局监听已启用" if unrestricted else "●  鸣潮已在前台" if active else "●  等待鸣潮前台",
@@ -597,6 +654,7 @@ class DashboardApp:
                 if command == "show": self.show_overlay()
                 elif command == "settings": self.open_settings()
                 elif command == "reset": self.engine.reset()
+                elif command == "toggle_float": self._toggle_battle_overlay_enabled()
                 elif command == "quit": self.shutdown(); return
         self._render(self.engine.view())
         self.root.after(80, self._ui_loop)
@@ -632,6 +690,35 @@ class DashboardApp:
         self.recognition_rows[2][1].config(fg=C["green"] if view.confidence >= .7 else C["gold"])
         self._update_preview(view)
         self._draw_sequence(view)
+        self._draw_battle_overlay(view)
+
+    def _draw_battle_overlay(self, view: EngineView) -> None:
+        canvas = self.float_canvas
+        canvas.delete("all")
+        cue = view.cue
+        character = cue.character if cue else "完成"
+        key = self._overlay_key(cue) if cue else "✓"
+        key_size = 45 if len(key) <= 3 else 32 if len(key) <= 7 else 25
+
+        def shadow_text(x: int, y: int, text: str, *, font, anchor: str = "w", fill: str = C["text"]) -> None:
+            canvas.create_text(x + 2, y + 2, text=text, anchor=anchor, fill="#000000", font=font)
+            canvas.create_text(x, y, text=text, anchor=anchor, fill=fill, font=font)
+
+        canvas.create_line(14, 18, 14, 99, fill=C["purple"], width=4)
+        shadow_text(33, 26, character, font=("Microsoft YaHei UI", 13, "bold"), fill="#D8D0FF")
+        shadow_text(33, 76, key, font=("Microsoft YaHei UI", key_size, "bold"))
+
+    def _overlay_key(self, cue: Cue) -> str:
+        if cue.action == "basic":
+            return "A"
+        if cue.action == "heavy":
+            return "Z"
+        configured = str(self.settings.get("keymap", {}).get(cue.action, cue.display_key)).upper()
+        aliases = {
+            "MOUSE_LEFT": "LMB", "MOUSE_RIGHT": "RMB", "MOUSE_MIDDLE": "MMB",
+            "MOUSE_X1": "M4", "MOUSE_X2": "M5", "SPACE": "SPACE",
+        }
+        return aliases.get(configured, configured)
 
     def _style_team_cards(self) -> None:
         selected = self.engine.preset.id.replace("-cycle", "-startup")
@@ -757,6 +844,7 @@ class DashboardApp:
     def _save_prompts(self) -> None:
         self.settings["only_when_game_active"] = bool(self.only_game_var.get())
         self.settings["sound_enabled"] = bool(self.sound_var.get())
+        self.settings.setdefault("overlay", {})["enabled"] = bool(self.overlay_enabled_var.get())
         self.settings["opacity"] = float(self.opacity_var.get())
         self.settings["game_titles"] = [line.strip() for line in self.title_text.get("1.0", "end").splitlines() if line.strip()]
         self.settings["calibration_completed"] = True
@@ -826,8 +914,36 @@ class DashboardApp:
     def _end_drag(self, _event: tk.Event) -> None:
         self._drag_origin = None
 
+    def _start_overlay_drag(self, event: tk.Event) -> None:
+        self._overlay_drag_origin = (
+            event.x_root - self.battle_overlay.winfo_x(),
+            event.y_root - self.battle_overlay.winfo_y(),
+        )
+
+    def _drag_overlay(self, event: tk.Event) -> None:
+        if self._overlay_drag_origin:
+            x = event.x_root - self._overlay_drag_origin[0]
+            y = event.y_root - self._overlay_drag_origin[1]
+            self.battle_overlay.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+    def _end_overlay_drag(self, _event: tk.Event) -> None:
+        self._overlay_drag_origin = None
+        overlay = self.settings.setdefault("overlay", {})
+        overlay["x"] = self.battle_overlay.winfo_x()
+        overlay["y"] = self.battle_overlay.winfo_y()
+        self.store.save(self.settings)
+
     def _show_context_menu(self, event: tk.Event) -> None:
         self.context_menu.tk_popup(event.x_root, event.y_root)
+
+    def _toggle_battle_overlay_enabled(self) -> None:
+        overlay = self.settings.setdefault("overlay", {})
+        overlay["enabled"] = not bool(overlay.get("enabled", True))
+        if hasattr(self, "overlay_enabled_var"):
+            self.overlay_enabled_var.set(overlay["enabled"])
+        if not overlay["enabled"]:
+            self.battle_overlay.withdraw()
+        self.store.save(self.settings)
 
     def hide_overlay(self) -> None:
         self.root.withdraw()
@@ -847,6 +963,7 @@ class DashboardApp:
             menu = pystray.Menu(
                 pystray.MenuItem("显示控制台", lambda: self.events.put(("command", "show")), default=True),
                 pystray.MenuItem("设置", lambda: self.events.put(("command", "settings"))),
+                pystray.MenuItem("显示 / 隐藏战斗悬浮提示", lambda: self.events.put(("command", "toggle_float"))),
                 pystray.MenuItem("从启动轴重新开始", lambda: self.events.put(("command", "reset"))),
                 pystray.MenuItem("退出", lambda: self.events.put(("command", "quit"))),
             )

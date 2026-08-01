@@ -7,8 +7,8 @@ from .models import ComboPreset, Cue
 
 
 ACTION_LABELS = {
-    "basic": "普攻",
-    "heavy": "长按普攻",
+    "basic": "A",
+    "heavy": "Z",
     "jump": "跳跃",
     "dodge": "闪避",
     "skill": "E",

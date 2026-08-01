@@ -24,7 +24,7 @@ def foreground_window_title() -> str:
 
 def is_game_foreground(titles: list[str]) -> bool:
     title = foreground_window_title().casefold()
-    if title.startswith("鸣潮逐键教练"):
+    if title.startswith(("鸣潮逐键教练", "鸣潮逐键提示", "鸣潮 · 连招教练")):
         return False
     return bool(title and any(candidate.casefold() in title for candidate in titles if candidate))
 
