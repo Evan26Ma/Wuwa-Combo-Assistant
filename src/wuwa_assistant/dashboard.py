@@ -97,6 +97,7 @@ class DashboardApp:
         self._auto_import_okww_portraits()
         self._install_bundled_state_templates()
         self._build_window()
+        self.root.after(60, self._register_taskbar_window)
         self._build_battle_overlay()
         self._auto_import_okww_templates()
         self._select_initial_preset()
@@ -215,7 +216,7 @@ class DashboardApp:
         )
         self.foreground_pill.pack(side="left", padx=(0, 12))
         self._header_button(controls, "设置", self.open_settings, width=7).pack(side="left", padx=(0, 18))
-        self._header_button(controls, "—", self.hide_overlay, width=3).pack(side="left")
+        self._header_button(controls, "—", self._minimize_to_taskbar, width=3).pack(side="left")
         self._header_button(controls, "□", self._toggle_maximize, width=3).pack(side="left")
         self._header_button(controls, "×", self.shutdown, width=3, danger=True).pack(side="left")
 
@@ -1191,6 +1192,49 @@ class DashboardApp:
             self._restore_geometry = self.root.geometry()
             self.root.geometry(f"{sw}x{sh}+0+0")
 
+    def _main_window_handle(self) -> int:
+        import ctypes
+
+        self.root.update_idletasks()
+        child = int(self.root.winfo_id())
+        hwnd = int(ctypes.windll.user32.GetAncestor(child, 2))
+        return hwnd or child
+
+    def _apply_taskbar_style(self) -> bool:
+        """Expose the custom-framed dashboard as a normal Windows app window."""
+        try:
+            import ctypes
+
+            hwnd = self._main_window_handle()
+            user32 = ctypes.windll.user32
+            style = int(user32.GetWindowLongW(hwnd, -20))
+            style = (style & ~0x00000080) | 0x00040000  # remove TOOLWINDOW, add APPWINDOW
+            user32.SetWindowLongW(hwnd, -20, style)
+            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)  # FRAMECHANGED without move/resize/activate
+            return True
+        except Exception:
+            return False
+
+    def _register_taskbar_window(self) -> None:
+        if not self._apply_taskbar_style():
+            return
+        # Re-show once after changing the native style so Explorer creates the taskbar button.
+        self.root.withdraw()
+        self.root.after(20, self._restore_after_taskbar_registration)
+
+    def _restore_after_taskbar_registration(self) -> None:
+        self.root.deiconify()
+        self._apply_taskbar_style()
+        self.root.lift()
+
+    def _minimize_to_taskbar(self) -> None:
+        try:
+            import ctypes
+
+            ctypes.windll.user32.ShowWindow(self._main_window_handle(), 6)  # SW_MINIMIZE
+        except Exception:
+            self.root.iconify()
+
     def _start_drag(self, event: tk.Event) -> None:
         self._drag_origin = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
 
@@ -1243,6 +1287,7 @@ class DashboardApp:
     def show_overlay(self) -> None:
         self.force_visible = True
         self.root.deiconify()
+        self.root.after_idle(self._apply_taskbar_style)
         self.root.lift()
 
     def _start_tray(self) -> None:
