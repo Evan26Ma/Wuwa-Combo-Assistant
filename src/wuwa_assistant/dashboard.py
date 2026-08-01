@@ -722,6 +722,7 @@ class DashboardApp:
         _label(card, "鸣潮 · 连招教练", size=25, weight="bold", anchor="w").pack(fill="x", padx=28, pady=(28, 7))
         _label(card, "v1.2.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
         _label(card, "本程序只读取你配置的按键状态，不拦截、不模拟、不修改游戏输入。", size=11, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", padx=28, pady=(18, 20))
+        _label(card, "测试阶段 · 仅供学习交流 · 完全免费 · 禁止商业售卖", size=11, color=C["gold"], weight="bold", anchor="w").pack(fill="x", padx=28, pady=(0, 14))
         for text in ("✓  完全离线运行", "✓  不保存完整按键日志", "✓  截图和识别模板仅保存在本机", "✓  启动轴完成后自动进入循环轴"):
             _label(card, text, size=10, color=C["green"], anchor="w").pack(fill="x", padx=28, pady=4)
         actions = tk.Frame(card, bg=C["panel"])

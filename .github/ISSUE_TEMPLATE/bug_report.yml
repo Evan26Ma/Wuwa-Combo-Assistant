@@ -1,0 +1,84 @@
+name: Bug 反馈
+description: 反馈按键监听、连招推进、悬浮窗或画面识别问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢参与测试。本项目仍处于 Beta 阶段。请勿提交账号、路径中的真实姓名或其他敏感信息。
+  - type: input
+    id: version
+    attributes:
+      label: 程序版本或提交号
+      placeholder: 例如 4067a2b
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Windows、分辨率与 DPI
+      placeholder: 例如 Windows 11 / 2560x1440 / 150%
+    validations:
+      required: true
+  - type: dropdown
+    id: admin
+    attributes:
+      label: 是否以管理员身份运行助手
+      options:
+        - 是
+        - 否
+        - 不确定
+    validations:
+      required: true
+  - type: input
+    id: team
+    attributes:
+      label: 队伍与实际槽位顺序
+      placeholder: 例如 1 卡提希娅 / 2 夏空 / 3 千咲
+    validations:
+      required: true
+  - type: textarea
+    id: keymap
+    attributes:
+      label: 相关键位设置
+      description: 只填写复现问题所需的游戏键位，不要填写账号信息。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 启动程序并选择……
+        2. 进入游戏后按……
+        3. 悬浮窗出现……
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期结果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际结果
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: 截图或补充信息
+      description: 可直接拖入截图；提交前请遮盖 UID、账号名和其他敏感内容。
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我知道本项目仍处于测试阶段，识别与连招数据可能不准确。
+          required: true
+        - label: 我已确认反馈中不包含账号或其他敏感信息。
+          required: true
