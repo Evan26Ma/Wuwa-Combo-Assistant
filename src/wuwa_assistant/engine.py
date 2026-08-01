@@ -84,6 +84,31 @@ class ComboEngine:
             return f"slot{self._team_order.index(cue.character) + 1}"
         return cue.action
 
+    def cue_window(self, count: int = 6) -> tuple[Cue, ...]:
+        """Return current and upcoming cues across startup/cycle boundaries."""
+        with self._lock:
+            if count <= 0:
+                return ()
+            preset = self.preset
+            index = self.index
+            result: list[Cue] = []
+            transitions = 0
+            while len(result) < count and transitions <= count:
+                if index < len(preset.cues):
+                    result.append(preset.cues[index])
+                    index += 1
+                    continue
+                if preset.next_preset_id:
+                    preset = self.presets[preset.next_preset_id]
+                    index = 0
+                    transitions += 1
+                elif preset.loops and preset.cues:
+                    index = 0
+                    transitions += 1
+                else:
+                    break
+            return tuple(result)
+
     def reset(self) -> None:
         with self._lock:
             now = time.perf_counter()

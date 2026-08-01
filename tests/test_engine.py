@@ -131,3 +131,18 @@ def test_character_vision_learns_pressed_slot_and_recovers_switch():
     assert engine.team_order[1] == "甲"
     assert engine.team_order_confirmed
     assert engine.index == 1
+
+
+def test_six_step_window_crosses_startup_and_wraps_cycle():
+    startup = ComboPreset(
+        "team-startup", "队伍 · 启动轴", ("甲", "乙", "丙"), "启动", 1000,
+        "", "", (cue(1, "skill"), cue(2, "echo")), next_preset_id="team-cycle",
+    )
+    cycle = ComboPreset(
+        "team-cycle", "队伍 · 循环轴", ("甲", "乙", "丙"), "循环", 1000,
+        "", "", (cue(3, "basic"), cue(4, "liberation")), loops=True,
+    )
+    engine = ComboEngine((startup, cycle))
+    assert [item.action for item in engine.cue_window(6)] == [
+        "skill", "echo", "basic", "liberation", "basic", "liberation",
+    ]

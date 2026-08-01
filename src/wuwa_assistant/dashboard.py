@@ -163,13 +163,15 @@ class DashboardApp:
         except tk.TclError:
             self.battle_overlay.attributes("-alpha", .92)
 
-        width, height = 330, 116
+        width, height = 650, 132
         overlay_settings = self.settings.get("overlay", {})
         x = overlay_settings.get("x")
         if x is None:
             x = self.root.winfo_screenwidth() - width - 48
         y = int(overlay_settings.get("y", 72))
-        self.battle_overlay.geometry(f"{width}x{height}+{max(0, int(x))}+{max(0, y)}")
+        x = min(max(0, int(x)), max(0, self.root.winfo_screenwidth() - width))
+        y = min(max(0, y), max(0, self.root.winfo_screenheight() - height))
+        self.battle_overlay.geometry(f"{width}x{height}+{x}+{y}")
 
         self.float_canvas = tk.Canvas(
             self.battle_overlay, width=width, height=height, bg=transparent,
@@ -988,20 +990,50 @@ class DashboardApp:
     def _draw_battle_overlay(self, view: EngineView) -> None:
         canvas = self.float_canvas
         canvas.delete("all")
-        cue = view.cue
+        cues = self.engine.cue_window(6)
+        cue = cues[0] if cues else None
         character = cue.character if cue else "完成"
         key = self._overlay_key(cue) if cue else "✓"
-        key_size = 45 if len(key) <= 3 else 32 if len(key) <= 7 else 25
+        key_size = 38 if len(key) <= 3 else 28 if len(key) <= 7 else 22
 
         def shadow_text(x: int, y: int, text: str, *, font, anchor: str = "w", fill: str = C["text"]) -> None:
             canvas.create_text(x + 2, y + 2, text=text, anchor=anchor, fill="#000000", font=font)
             canvas.create_text(x, y, text=text, anchor=anchor, fill=fill, font=font)
 
-        canvas.create_line(14, 18, 14, 99, fill=C["purple"], width=4)
-        shadow_text(33, 26, character, font=("Microsoft YaHei UI", 13, "bold"), fill="#D8D0FF")
-        shadow_text(33, 76, key, font=("Microsoft YaHei UI", key_size, "bold"))
-        canvas.create_rectangle(225, 6, 326, 46, fill=C["panel_alt"], outline=C["purple"], width=2, tags=("axis_button",))
-        canvas.create_text(275, 26, text="全部按键", fill=C["text"], font=("Microsoft YaHei UI", 10, "bold"), tags=("axis_button",))
+        canvas.create_line(10, 12, 10, 122, fill=C["purple"], width=4)
+        shadow_text(25, 18, character, font=("Microsoft YaHei UI", 12, "bold"), fill="#D8D0FF")
+        canvas.create_text(117, 19, text=f"{view.phase} · {view.index + 1}/{view.total}", anchor="w",
+                           fill=C["muted"], font=("Microsoft YaHei UI", 8))
+
+        canvas.create_rectangle(24, 43, 108, 113, fill=C["panel_hot"], outline=C["purple"], width=3)
+        canvas.create_text(66, 51, text="当前", anchor="n", fill="#CDBFFF",
+                           font=("Microsoft YaHei UI", 8, "bold"))
+        shadow_text(66, 84, key, anchor="center", font=("Microsoft YaHei UI", key_size, "bold"))
+
+        upcoming = list(cues[1:6])
+        for index in range(5):
+            left = 132 + index * 88
+            center = left + 34
+            canvas.create_line(left - 16, 79, left - 5, 79, fill=C["border_hot"] if index == 0 else C["border"], width=2)
+            canvas.create_polygon(left - 7, 75, left - 1, 79, left - 7, 83,
+                                  fill=C["border_hot"] if index == 0 else C["border"], outline="")
+            canvas.create_rectangle(left, 51, left + 68, 105, fill=C["panel_alt"], outline=C["border"], width=2)
+            if index < len(upcoming):
+                item = upcoming[index]
+                item_key = self._overlay_key(item)
+                item_size = 22 if len(item_key) <= 3 else 17 if len(item_key) <= 6 else 14
+                canvas.create_text(center, 76, text=item_key, fill=C["text"],
+                                   font=("Microsoft YaHei UI", item_size, "bold"))
+                canvas.create_text(center, 116, text=item.character, fill=C["muted"],
+                                   font=("Microsoft YaHei UI", 7))
+            else:
+                canvas.create_text(center, 78, text="—", fill=C["dim"],
+                                   font=("Microsoft YaHei UI", 17, "bold"))
+
+        canvas.create_rectangle(558, 5, 644, 36, fill=C["panel_alt"], outline=C["border_hot"], width=1,
+                                tags=("axis_button",))
+        canvas.create_text(601, 20, text="完整轴", fill=C["text"], font=("Microsoft YaHei UI", 9, "bold"),
+                           tags=("axis_button",))
         canvas.tag_bind("axis_button", "<ButtonRelease-1>", self._open_full_axis_event)
         canvas.tag_bind("axis_button", "<Enter>", lambda _event: canvas.config(cursor="hand2"))
         canvas.tag_bind("axis_button", "<Leave>", lambda _event: canvas.config(cursor="fleur"))
@@ -1011,7 +1043,8 @@ class DashboardApp:
             return "A"
         if cue.action == "heavy":
             return "Z"
-        return self._configured_key(self.engine.action_for(cue))
+        configured = self._configured_key(self.engine.action_for(cue))
+        return f"切{configured}" if cue.action.startswith("slot") else configured
 
     def _style_team_cards(self) -> None:
         selected = self.engine.preset.id.replace("-cycle", "-startup")
@@ -1042,12 +1075,7 @@ class DashboardApp:
         c.create_oval(w / 2 - 3, -1, w / 2 + 3, 5, fill="#C9B8FF", outline="")
 
     def _update_preview(self, view: EngineView) -> None:
-        preset = self.engine.preset
-        upcoming = list(preset.cues[view.index + 1:view.index + 4])
-        if len(upcoming) < 3 and preset.next_preset_id:
-            upcoming.extend(self.engine.presets[preset.next_preset_id].cues[:3 - len(upcoming)])
-        elif len(upcoming) < 3 and preset.loops:
-            upcoming.extend(preset.cues[:3 - len(upcoming)])
+        upcoming = list(self.engine.cue_window(4)[1:4])
         for index, label in enumerate(self.preview_labels):
             if index < len(upcoming):
                 item = upcoming[index]
