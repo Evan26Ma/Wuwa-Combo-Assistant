@@ -110,3 +110,24 @@ def test_reset_from_cycle_returns_to_startup():
     engine.reset()
     assert engine.preset.id == "team-startup"
     assert engine.cycle_count == 0
+
+
+def test_switch_cue_uses_detected_team_order():
+    combo = preset(cue(1, "slot1", character="甲"), cue(2, "basic", character="甲"))
+    engine = ComboEngine((combo,))
+    assert engine.set_team_order(("乙", "丙", "甲"))
+    assert engine.action_for(engine.cue) == "slot3"
+    engine.process(InputEvent("slot3", engine.cue_started_at + 0.2))
+    assert engine.index == 1
+
+
+def test_character_vision_learns_pressed_slot_and_recovers_switch():
+    combo = preset(cue(1, "slot1", character="甲"), cue(2, "basic", character="甲"))
+    engine = ComboEngine((combo,))
+    pressed_at = engine.cue_started_at + 0.2
+    engine.process(InputEvent("slot2", pressed_at))
+    assert engine.index == 0
+    engine.observe_character("甲", pressed_at + 0.3)
+    assert engine.team_order[1] == "甲"
+    assert engine.team_order_confirmed
+    assert engine.index == 1

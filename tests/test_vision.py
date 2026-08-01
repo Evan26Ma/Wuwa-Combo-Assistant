@@ -4,6 +4,7 @@ from PIL import Image
 
 from wuwa_assistant.vision import (
     StateVisionMonitor,
+    TeamVisionMonitor,
     bundled_portrait_paths,
     image_similarity,
     import_okww_portraits,
@@ -96,3 +97,31 @@ def test_state_roi_scales_to_selected_monitor():
     config = {"roi_ratio": [0.5, 0.25, 0.1, 0.2]}
     monitor = {"left": 100, "top": 50, "width": 2000, "height": 1000}
     assert StateVisionMonitor._roi(config, monitor) == {"left": 1100, "top": 300, "width": 200, "height": 200}
+
+
+def test_team_vision_selects_unique_best_slot_order():
+    team = ("甲", "乙", "丙")
+    scores = {
+        (0, "甲"): 0.20, (0, "乙"): 0.93, (0, "丙"): 0.31,
+        (1, "甲"): 0.22, (1, "乙"): 0.35, (1, "丙"): 0.91,
+        (2, "甲"): 0.95, (2, "乙"): 0.18, (2, "丙"): 0.25,
+    }
+    order, chosen, margin = TeamVisionMonitor.best_order(team, scores)
+    assert order == ("乙", "丙", "甲")
+    assert chosen == {"slot1": 0.93, "slot2": 0.91, "slot3": 0.95}
+    assert margin > 1.0
+
+
+def test_team_vision_searches_feature_inside_slot_box():
+    slot = Image.new("RGB", (80, 90), "black")
+    feature = Image.new("RGB", (24, 30), "white")
+    slot.paste(feature, (41, 37))
+    assert TeamVisionMonitor._best_box_score(slot, feature, feature.size) > 0.95
+
+
+def test_team_slot_boxes_scale_with_monitor():
+    monitor = {"left": 100, "top": 50, "width": 2000, "height": 1000}
+    first = TeamVisionMonitor._box_roi(monitor, 0)
+    third = TeamVisionMonitor._box_roi(monitor, 2)
+    assert first["left"] > 1900
+    assert third["top"] > first["top"]

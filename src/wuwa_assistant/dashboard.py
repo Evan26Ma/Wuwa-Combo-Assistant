@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import re
 import threading
 import tkinter as tk
 from dataclasses import asdict
@@ -17,6 +18,7 @@ from .settings import SettingsStore
 from .vision import (
     OKWW_SIGNAL_CATEGORIES,
     StateVisionMonitor,
+    TeamVisionMonitor,
     VisionMonitor,
     bundled_portrait_paths,
     import_okww_portraits,
@@ -74,6 +76,7 @@ class DashboardApp:
         self.input_monitor: InputMonitor | None = None
         self.vision_monitor: VisionMonitor | None = None
         self.state_vision_monitor: StateVisionMonitor | None = None
+        self.team_vision_monitor: TeamVisionMonitor | None = None
         self.vision_signal = ""
         self.vision_score = -1.0
         self.state_vision_scores: dict[str, tuple[float, bool]] = {}
@@ -506,7 +509,7 @@ class DashboardApp:
         card = self._card(parent)
         _label(card, "识别状态", size=12, weight="bold", anchor="w").pack(fill="x", padx=20, pady=(16, 8))
         self.recognition_rows: list[tuple[tk.Label, tk.Label]] = []
-        for text in ("按键序列匹配", "长按输入判定", "锚点同步状态", "角色 HUD 增强"):
+        for text in ("按键序列匹配", "长按输入判定", "锚点同步状态", "角色 HUD 增强", "队伍槽位自动识别"):
             row = tk.Frame(card, bg=C["panel"])
             row.pack(fill="x", padx=20, pady=5)
             name = _label(row, text, size=10, color="#D2D8E4", anchor="w")
@@ -540,7 +543,13 @@ class DashboardApp:
 
     # ---------- integrated pages ----------
     def _build_teams_page(self, parent: tk.Frame) -> None:
-        self._page_header(parent, "队伍选择", "选择启动轴即可；完成后程序会自动接入对应循环轴")
+        self._page_header(parent, "队伍选择", "选择启动轴即可；程序会识别游戏内实际的 1 / 2 / 3 号位")
+        self.team_order_label = _label(
+            parent, "队伍位置：等待画面识别", size=10, color=C["gold"], anchor="w",
+            bg=C["panel_alt"], padx=14, pady=9, highlightthickness=1,
+            highlightbackground=C["border"],
+        )
+        self.team_order_label.pack(fill="x", pady=(0, 12))
         grid = tk.Frame(parent, bg=C["bg"])
         grid.pack(fill="both", expand=True)
         startups = [preset for preset in self.presets if preset.phase == "启动"]
@@ -560,7 +569,8 @@ class DashboardApp:
             _label(details, f"启动轴  {len(preset.cues)} 步", size=10, anchor="w").pack(fill="x", padx=16, pady=(14, 4))
             _label(details, f"循环轴  {len(cycle.cues) if cycle else 0} 步 / 无限循环", size=10, color=C["muted"], anchor="w").pack(fill="x", padx=16, pady=(0, 14))
             _label(card, "按键概览", size=10, color=C["muted"], anchor="w").pack(fill="x", padx=26)
-            axis = "  →  ".join(cue.display_key for cue in preset.cues[:10])
+            saved_order = self.settings.get("team_orders", {}).get(self._team_signature(preset.team), preset.team)
+            axis = "  →  ".join(self._cue_display_for_order(cue, tuple(saved_order)) for cue in preset.cues[:10])
             _label(card, axis + ("  …" if len(preset.cues) > 10 else ""), size=11, wraplength=470, justify="left", anchor="w").pack(fill="x", padx=26, pady=(8, 28))
             choose = self._button(card, "使用这套连招", lambda pid=preset.id: self._select_team_from_page(pid), primary=True)
             choose.pack(anchor="w", padx=26, pady=(0, 28))
@@ -578,8 +588,8 @@ class DashboardApp:
             ("skill", "共鸣技能 E"), ("echo", "声骸技能 Q"),
             ("liberation", "共鸣解放 R"), ("utility", "交互 / 钩锁 F"),
             ("jump", "跳跃"), ("dodge", "闪避"),
-            ("forward", "前进"), ("slot1", "切人 1"),
-            ("slot2", "切人 2"), ("slot3", "切人 3"),
+            ("forward", "前进"), ("slot1", "队伍槽位 1"),
+            ("slot2", "队伍槽位 2"), ("slot3", "队伍槽位 3"),
         )
         self.key_vars: dict[str, tk.StringVar] = {}
         choices = sorted(VK_CODES, key=lambda value: (len(value), value))
@@ -731,13 +741,59 @@ class DashboardApp:
         preset_id = str(self.settings.get("preset_id", "kaxiaqian-startup"))
         if preset_id in self.engine.presets:
             self.engine.select(preset_id)
+        self._apply_saved_team_order()
         self._refresh_axis_page()
 
     def _choose_team(self, preset_id: str) -> None:
         self.settings["preset_id"] = preset_id
         self.store.save(self.settings)
         self.engine.select(preset_id)
+        self._apply_saved_team_order()
         self._refresh_axis_page()
+
+    @staticmethod
+    def _team_signature(team: tuple[str, str, str]) -> str:
+        return "|".join(sorted(team))
+
+    def _apply_saved_team_order(self) -> None:
+        signature = self._team_signature(self.engine.preset.team)
+        order = self.settings.get("team_orders", {}).get(signature)
+        if isinstance(order, list):
+            self.engine.set_team_order(order, confirmed=False)
+
+    def _save_team_order(self) -> None:
+        signature = self._team_signature(self.engine.preset.team)
+        orders = self.settings.setdefault("team_orders", {})
+        order = list(self.engine.team_order)
+        if orders.get(signature) != order:
+            orders[signature] = order
+            self.store.save(self.settings)
+
+    def _configured_key(self, action: str) -> str:
+        configured = str(self.settings.get("keymap", {}).get(action, action)).upper()
+        aliases = {
+            "MOUSE_LEFT": "LMB", "MOUSE_RIGHT": "RMB", "MOUSE_MIDDLE": "MMB",
+            "MOUSE_X1": "M4", "MOUSE_X2": "M5", "SPACE": "SPACE",
+        }
+        return aliases.get(configured, configured)
+
+    def _cue_display(self, cue: Cue) -> str:
+        return self._cue_display_for_order(cue, self.engine.team_order)
+
+    def _cue_display_for_order(self, cue: Cue, order: tuple[str, ...]) -> str:
+        if cue.action.startswith("slot"):
+            action = f"slot{order.index(cue.character) + 1}" if cue.character in order else cue.action
+            return f"切{self._configured_key(action)}"
+        return cue.display_key
+
+    def _cue_condition(self, cue: Cue) -> str:
+        if not cue.action.startswith("slot"):
+            return cue.condition
+        key = self._configured_key(self.engine.action_for(cue))
+        condition = re.sub(r"切到\s*[123]\s*号位", f"按 {key} 切到 {cue.character}", cue.condition)
+        if condition == cue.condition:
+            condition = f"{condition} · 按 {key} 切到 {cue.character}"
+        return condition
 
     def _refresh_axis_page(self) -> None:
         if not hasattr(self, "axis_texts"):
@@ -745,7 +801,11 @@ class DashboardApp:
         startup_id = self.engine.preset.id.replace("-cycle", "-startup")
         startup = self.engine.presets[startup_id]
         cycle = self.engine.presets.get(startup.next_preset_id)
-        self.axis_team_label.config(text=f"{'  ·  '.join(startup.team)}   /   {startup.name.split(' · ', 1)[0]}")
+        order = self.engine.team_order
+        self.axis_team_label.config(
+            text=f"{'  ·  '.join(f'{index + 1} {name}' for index, name in enumerate(order))}"
+                 f"   /   {startup.name.split(' · ', 1)[0]}"
+        )
         for text_widget, preset in zip(self.axis_texts, (startup, cycle)):
             text_widget.config(state="normal")
             text_widget.delete("1.0", "end")
@@ -756,8 +816,7 @@ class DashboardApp:
             text_widget.config(state="disabled")
             text_widget.yview_moveto(0)
 
-    @staticmethod
-    def _write_axis(text_widget: tk.Text, preset: ComboPreset) -> None:
+    def _write_axis(self, text_widget: tk.Text, preset: ComboPreset) -> None:
         previous_segment = ""
         for index, cue in enumerate(preset.cues, start=1):
             if cue.segment != previous_segment:
@@ -766,9 +825,9 @@ class DashboardApp:
                 text_widget.insert("end", f"{cue.character} · {cue.segment}\n", "segment")
                 previous_segment = cue.segment
             text_widget.insert("end", f"{index:02d}  ", "step")
-            text_widget.insert("end", f"{cue.display_key}", "key")
+            text_widget.insert("end", self._cue_display(cue), "key")
             text_widget.insert("end", f"    {cue.character}\n")
-            text_widget.insert("end", f"操作：{cue.condition}\n", "condition")
+            text_widget.insert("end", f"操作：{self._cue_condition(cue)}\n", "condition")
             if cue.advice:
                 text_widget.insert("end", f"OK-WW 建议：{cue.advice}\n", "advice")
 
@@ -779,6 +838,8 @@ class DashboardApp:
             self.vision_monitor.stop()
         if self.state_vision_monitor:
             self.state_vision_monitor.stop()
+        if self.team_vision_monitor:
+            self.team_vision_monitor.stop()
         enabled = lambda: (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))
         self.input_monitor = InputMonitor(
             self.settings["keymap"], self.engine.process,
@@ -800,6 +861,16 @@ class DashboardApp:
         )
         if self.settings.get("vision_enabled") and self.settings.get("state_vision", {}).get("enabled"):
             self.state_vision_monitor.start()
+        self.team_vision_monitor = TeamVisionMonitor(
+            self.store.templates_dir, self.settings,
+            expected_team=lambda: tuple(self.engine.preset.team),
+            callback=lambda order, scores, matched: self.events.put(
+                ("team_vision", (order, scores, matched))
+            ),
+            enabled=enabled,
+        )
+        if self.settings.get("vision_enabled"):
+            self.team_vision_monitor.start()
 
     def _ui_loop(self) -> None:
         active = (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))
@@ -836,6 +907,11 @@ class DashboardApp:
                 if hasattr(self, "okww_status"):
                     any_match = any(active for _value, active in self.state_vision_scores.values())
                     self.okww_status.config(text=self._okww_status_text(), fg=C["green"] if any_match else C["muted"], width=16)
+            elif kind == "team_vision":
+                order, _scores, matched = payload  # type: ignore[misc]
+                if matched and self.engine.set_team_order(order, confirmed=True):
+                    self._save_team_order()
+                    self._refresh_axis_page()
             elif kind == "command":
                 command = str(payload)
                 if command == "show": self.show_overlay()
@@ -867,12 +943,13 @@ class DashboardApp:
             self.advice_label.config(text="")
             self.segment_label.config(text="")
         else:
-            size = 38 if len(cue.display_key) <= 2 else 29 if len(cue.display_key) == 3 else 23
-            self.key_label.config(text=cue.display_key, fg=C["text"], font=("Microsoft YaHei UI", size, "bold"))
+            display = self._cue_display(cue)
+            size = 38 if len(display) <= 2 else 29 if len(display) == 3 else 23
+            self.key_label.config(text=display, fg=C["text"], font=("Microsoft YaHei UI", size, "bold"))
             self.condition_title.config(text=cue.segment)
             hint = self._state_vision_hint(cue)
             suffix = f"  ·  {hint}" if hint else ""
-            self.condition_label.config(text=f"操作：{cue.condition}{suffix}")
+            self.condition_label.config(text=f"操作：{self._cue_condition(cue)}{suffix}")
             self.advice_label.config(text=f"OK-WW 建议：{cue.advice}" if cue.advice else "")
             self.segment_label.config(text=f"第 {view.index + 1} / {view.total} 步")
         self.phase_label.config(text="启动轴（仅一次）" if view.phase == "启动" else f"自动循环中  ·  第 {max(1, view.cycle_count)} 轮")
@@ -882,6 +959,14 @@ class DashboardApp:
         self.recognition_rows[2][1].config(fg=C["green"] if view.confidence >= .7 else C["gold"])
         has_state_match = any(matched for _score, matched in self.state_vision_scores.values())
         self.recognition_rows[3][1].config(fg=C["green"] if has_state_match else C["dim"])
+        self.recognition_rows[4][1].config(fg=C["green"] if self.engine.team_order_confirmed else C["gold"])
+        if hasattr(self, "team_order_label"):
+            order_text = "  ·  ".join(f"{index + 1} {name}" for index, name in enumerate(self.engine.team_order))
+            prefix = "已识别" if self.engine.team_order_confirmed else "等待确认 · 暂用"
+            self.team_order_label.config(
+                text=f"队伍位置：{prefix}  {order_text}",
+                fg=C["green"] if self.engine.team_order_confirmed else C["gold"],
+            )
         self._update_preview(view)
         self._draw_sequence(view)
         self._draw_battle_overlay(view)
@@ -926,12 +1011,7 @@ class DashboardApp:
             return "A"
         if cue.action == "heavy":
             return "Z"
-        configured = str(self.settings.get("keymap", {}).get(cue.action, cue.display_key)).upper()
-        aliases = {
-            "MOUSE_LEFT": "LMB", "MOUSE_RIGHT": "RMB", "MOUSE_MIDDLE": "MMB",
-            "MOUSE_X1": "M4", "MOUSE_X2": "M5", "SPACE": "SPACE",
-        }
-        return aliases.get(configured, configured)
+        return self._configured_key(self.engine.action_for(cue))
 
     def _style_team_cards(self) -> None:
         selected = self.engine.preset.id.replace("-cycle", "-startup")
@@ -971,7 +1051,7 @@ class DashboardApp:
         for index, label in enumerate(self.preview_labels):
             if index < len(upcoming):
                 item = upcoming[index]
-                label.config(text=f"{item.display_key}\n{item.character}", fg=C["text"])
+                label.config(text=f"{self._cue_display(item)}\n{item.character}", fg=C["text"])
             else:
                 label.config(text="—", fg=C["dim"])
 
@@ -1002,7 +1082,7 @@ class DashboardApp:
             if current:
                 canvas.create_oval(x - radius - 5, y - radius - 5, x + radius + 5, y + radius + 5, outline="#3E2C75", width=2)
             canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=fill, outline=outline, width=3 if current else 2)
-            text = "✓" if completed else cue.display_key[:2]
+            text = "✓" if completed else self._cue_display(cue)[:2]
             canvas.create_text(x, y, text=text, fill="white" if completed or current else C["muted"], font=("Microsoft YaHei UI", 12, "bold"))
         canvas.create_text(w - 8, y, text="•••", anchor="e", fill=C["muted"], font=("Segoe UI", 12))
 
@@ -1317,6 +1397,8 @@ class DashboardApp:
             self.vision_monitor.stop()
         if self.state_vision_monitor:
             self.state_vision_monitor.stop()
+        if self.team_vision_monitor:
+            self.team_vision_monitor.stop()
         if self._tray:
             self._tray.stop()
         self.store.save(self.settings)

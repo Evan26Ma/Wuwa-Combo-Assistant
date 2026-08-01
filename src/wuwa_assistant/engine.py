@@ -25,6 +25,9 @@ class ComboEngine:
         self._history: deque[InputEvent] = deque(maxlen=10)
         self._vision_character = ""
         self._vision_character_at = -1.0
+        self._team_order = tuple(self.preset.team)
+        self._team_order_confirmed = False
+        self._pending_slot_event: InputEvent | None = None
         self._on_change = on_change
         self._lock = threading.RLock()
 
@@ -46,7 +49,40 @@ class ComboEngine:
                 selected = self.presets.get(startup_id, selected)
             self.preset = selected
             self._root_preset_id = selected.id
+            self._team_order = tuple(selected.team)
+            self._team_order_confirmed = False
+            self._pending_slot_event = None
             self.reset()
+
+    @property
+    def team_order(self) -> tuple[str, str, str]:
+        return self._team_order
+
+    @property
+    def team_order_confirmed(self) -> bool:
+        return self._team_order_confirmed
+
+    def set_team_order(self, order: tuple[str, str, str] | list[str], *, confirmed: bool = True) -> bool:
+        """Apply the actual in-game slot order when it contains the selected team."""
+        with self._lock:
+            normalized = tuple(str(item) for item in order)
+            if len(normalized) != 3 or set(normalized) != set(self.preset.team):
+                return False
+            changed = normalized != self._team_order or (confirmed and not self._team_order_confirmed)
+            self._team_order = normalized
+            self._team_order_confirmed = self._team_order_confirmed or confirmed
+            if changed:
+                self.message = "队伍位置已识别：" + " · ".join(
+                    f"{index + 1} {name}" for index, name in enumerate(normalized)
+                )
+                self._emit()
+            return changed
+
+    def action_for(self, cue: Cue) -> str:
+        """Resolve a character switch cue to its current physical team slot."""
+        if cue.action.startswith("slot") and cue.character in self._team_order:
+            return f"slot{self._team_order.index(cue.character) + 1}"
+        return cue.action
 
     def reset(self) -> None:
         with self._lock:
@@ -59,6 +95,7 @@ class ComboEngine:
             self.message = "已重置，等待第一个游戏输入"
             self.confidence = 1.0
             self._history.clear()
+            self._pending_slot_event = None
             self._emit(now)
 
     def step(self, delta: int) -> None:
@@ -84,31 +121,48 @@ class ComboEngine:
             self.message = "正在监听游戏输入" if active else "游戏未在前台，已暂停"
             self._emit()
 
-    def observe_character(self, character: str, timestamp: float | None = None) -> None:
-        """Accept a soft visual observation for anchor scoring only."""
+    def observe_character(self, character: str, timestamp: float | None = None,
+                          *, learn_slot: bool = True) -> None:
+        """Accept a visual observation and optionally learn the last pressed team slot."""
         with self._lock:
+            observed_at = timestamp if timestamp is not None else time.perf_counter()
             self._vision_character = character
-            self._vision_character_at = timestamp if timestamp is not None else time.perf_counter()
+            self._vision_character_at = observed_at
+            pending = self._pending_slot_event
+            if not learn_slot or character not in self.preset.team or pending is None:
+                return
+            if observed_at - pending.timestamp > 2.5:
+                self._pending_slot_event = None
+                return
+            target_index = int(pending.action[-1]) - 1
+            current_index = self._team_order.index(character)
+            if target_index != current_index:
+                reordered = list(self._team_order)
+                reordered[target_index], reordered[current_index] = reordered[current_index], reordered[target_index]
+                self.set_team_order(reordered, confirmed=True)
+            else:
+                self._team_order_confirmed = True
+            cue = self.cue
+            if cue and cue.action.startswith("slot") and cue.character == character \
+                    and self.action_for(cue) == pending.action:
+                self._accept_current_cue(pending)
+            self._pending_slot_event = None
 
     def process(self, event: InputEvent) -> None:
         with self._lock:
             if not self.active or self.cue is None:
                 return
             self._history.append(event)
+            if event.action in {"slot1", "slot2", "slot3"}:
+                self._pending_slot_event = event
             cue = self.cue
-            if event.action == cue.action:
+            if event.action == self.action_for(cue):
                 if cue.hold_ms and event.held_ms < cue.hold_ms:
                     self.message = f"长按不足：需要约 {cue.hold_ms}ms"
                     self.confidence = 0.72
                     self._emit(event.timestamp)
                     return
-                self.index += 1
-                self.cue_started_at = event.timestamp
-                self.confidence = 1.0
-                self.message = f"已识别 {cue.display_key}"
-                if self.index >= len(self.preset.cues):
-                    self._advance_phase(event.timestamp)
-                self._emit(event.timestamp)
+                self._accept_current_cue(event)
                 return
 
             recovered = self._try_anchor_resync(event)
@@ -116,6 +170,18 @@ class ComboEngine:
                 self.message = f"观察到 {event.action}，等待 {cue.display_key} 或下一个关键锚点"
                 self.confidence = 0.45
                 self._emit(event.timestamp)
+
+    def _accept_current_cue(self, event: InputEvent) -> None:
+        cue = self.cue
+        if cue is None:
+            return
+        self.index += 1
+        self.cue_started_at = event.timestamp
+        self.confidence = 1.0
+        self.message = f"已识别 {cue.display_key}"
+        if self.index >= len(self.preset.cues):
+            self._advance_phase(event.timestamp)
+        self._emit(event.timestamp)
 
     def _advance_phase(self, timestamp: float) -> None:
         """Move startup → cycle, then repeat the cycle without user input."""
@@ -142,13 +208,13 @@ class ComboEngine:
         recent = [item.action for item in self._history]
         for idx in range(start, stop):
             candidate = self.preset.cues[idx]
-            if not candidate.anchor or candidate.action != event.action:
+            if not candidate.anchor or self.action_for(candidate) != event.action:
                 continue
             score = 4
             if candidate.character == self._observed_character():
                 score += 3
             template_start = max(0, idx - min(3, len(recent)))
-            template = [cue.action for cue in self.preset.cues[template_start:idx + 1]]
+            template = [self.action_for(cue) for cue in self.preset.cues[template_start:idx + 1]]
             observed = recent[-len(template):]
             suffix_matches = sum(a == b for a, b in zip(template, observed))
             score += suffix_matches
@@ -171,11 +237,7 @@ class ComboEngine:
     def _observed_character(self) -> str:
         if self._vision_character and time.perf_counter() - self._vision_character_at <= 2.0:
             return self._vision_character
-        role_by_action = {
-            "slot1": self.preset.team[0],
-            "slot2": self.preset.team[1],
-            "slot3": self.preset.team[2],
-        }
+        role_by_action = {f"slot{index + 1}": name for index, name in enumerate(self._team_order)}
         for event in reversed(self._history):
             if event.action in role_by_action:
                 return role_by_action[event.action]

@@ -31,6 +31,8 @@
 
 程序已内置 12 项稳定 HUD 模板：卡提希娅、夏空、千咲、秧秧、穗穗角色识别，卡提三剑/形态/空中攻击/终结大招，以及穗穗 Forte3。首次运行会自动安装到 `%APPDATA%` 并启用；识别结果仅用于提示、角色同步和锚点评分，不会阻止按键推进。本机安装了 OK-WW 时，仍可在“画面识别”页重新导入更新模板。
 
+队伍槽位采用与 OK-WW 相同的三栏识别思路：分别检查右侧 `1 / 2 / 3` 号位的角色特征，连续确认后自动保存实际排序。连招中的切人动作按角色名记录，显示时再换算成当前队伍对应的数字键；识别暂时失败时沿用上次确认排序，并可在切人后通过当前角色识别自动纠正。
+
 控制台已内置卡提希娅、夏空、千咲、秧秧和穗穗的 HUD 头像，用于队伍卡片和队伍选择页，无需安装 OK-WW。若本机存在 OK-WW，程序仍会把重新提取的头像缓存到 `%APPDATA%\WuwaComboAssistant\okww-assets` 并优先使用。素材来源和许可见 [`src/wuwa_assistant/assets/portraits/README.md`](src/wuwa_assistant/assets/portraits/README.md)。
 
 仓库附带 [`wuwa-teaching-link-to-combo`](skills/wuwa-teaching-link-to-combo/SKILL.md) Skill。安装后只需提供鸣潮教学链接，即可按固定流程提取启动轴、循环轴、逐键条件、OK-WW 建议、识图锚点并完成测试与 EXE 构建。

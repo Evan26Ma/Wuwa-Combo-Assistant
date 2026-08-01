@@ -5,6 +5,7 @@ import json
 import threading
 import time
 from collections.abc import Callable
+from itertools import permutations
 from pathlib import Path
 
 
@@ -53,6 +54,21 @@ BUNDLED_PORTRAIT_FILES = {
     "秧秧": "yangyang-sp.png",
     "穗穗": "suisui.png",
 }
+
+CHARACTER_SIGNALS = {
+    "卡提希娅": "character:卡提希娅",
+    "夏空": "character:夏空",
+    "千咲": "character:千咲",
+    "秧秧": "character:秧秧",
+    "穗穗": "character:穗穗",
+}
+
+# Normalized from OK-WW's box_char_1 / box_char_2 / box_char_3 annotations.
+TEAM_SLOT_BOXES = (
+    (0.9154, 0.1935, 0.0340, 0.0727),
+    (0.9154, 0.3176, 0.0340, 0.0699),
+    (0.9156, 0.4417, 0.0346, 0.0690),
+)
 
 
 def _safe_name(signal: str) -> str:
@@ -407,3 +423,148 @@ class StateVisionMonitor:
                             break
             except Exception:
                 self._stop.wait(0.4)
+
+
+class TeamVisionMonitor:
+    """Identify all three right-side party slots using OK-WW character crops."""
+
+    def __init__(self, templates_dir: Path, settings: dict,
+                 expected_team: Callable[[], tuple[str, str, str]],
+                 callback: Callable[[tuple[str, str, str], dict[str, float], bool], None],
+                 enabled: Callable[[], bool] | None = None) -> None:
+        self.templates_dir = templates_dir
+        self.settings = settings
+        self.expected_team = expected_team
+        self.callback = callback
+        self.enabled = enabled or (lambda: True)
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._last_order: tuple[str, str, str] | None = None
+        self._streak = 0
+
+    def start(self) -> None:
+        if not VisionMonitor.available() or (self._thread and self._thread.is_alive()):
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, name="team-vision-monitor", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=1.0)
+
+    @staticmethod
+    def _box_roi(monitor: dict, slot_index: int) -> dict[str, int]:
+        left, top, width, height = TEAM_SLOT_BOXES[slot_index]
+        return {
+            "left": int(monitor["left"] + left * monitor["width"]),
+            "top": int(monitor["top"] + top * monitor["height"]),
+            "width": max(1, int(width * monitor["width"])),
+            "height": max(1, int(height * monitor["height"])),
+        }
+
+    @staticmethod
+    def _best_box_score(slot_image, template, target_size: tuple[int, int]) -> float:
+        """Search a tight character feature inside one OK-WW party-slot box."""
+        target_width = max(1, min(slot_image.width, int(target_size[0])))
+        target_height = max(1, min(slot_image.height, int(target_size[1])))
+        feature = template.convert("RGB").resize((target_width, target_height))
+        max_x = max(0, slot_image.width - target_width)
+        max_y = max(0, slot_image.height - target_height)
+        step_x = max(1, target_width // 8)
+        step_y = max(1, target_height // 8)
+        xs = list(range(0, max_x + 1, step_x))
+        ys = list(range(0, max_y + 1, step_y))
+        if not xs or xs[-1] != max_x:
+            xs.append(max_x)
+        if not ys or ys[-1] != max_y:
+            ys.append(max_y)
+        best = 0.0
+        best_xy = (0, 0)
+        for y in ys:
+            for x in xs:
+                candidate = slot_image.crop((x, y, x + target_width, y + target_height))
+                score = state_image_similarity(candidate, feature)
+                if score > best:
+                    best = score
+                    best_xy = (x, y)
+        center_x, center_y = best_xy
+        for y in range(max(0, center_y - step_y), min(max_y, center_y + step_y) + 1):
+            for x in range(max(0, center_x - step_x), min(max_x, center_x + step_x) + 1):
+                candidate = slot_image.crop((x, y, x + target_width, y + target_height))
+                best = max(best, state_image_similarity(candidate, feature))
+        return best
+
+    @staticmethod
+    def best_order(team: tuple[str, str, str], scores: dict[tuple[int, str], float]
+                   ) -> tuple[tuple[str, str, str], dict[str, float], float]:
+        ranked: list[tuple[float, tuple[str, str, str]]] = []
+        for order in permutations(team):
+            ranked.append((sum(scores.get((slot, character), 0.0) for slot, character in enumerate(order)), order))
+        ranked.sort(reverse=True)
+        best_total, best = ranked[0]
+        runner_up = ranked[1][0] if len(ranked) > 1 else 0.0
+        chosen = {f"slot{slot + 1}": scores.get((slot, character), 0.0) for slot, character in enumerate(best)}
+        return best, chosen, best_total - runner_up
+
+    def _run(self) -> None:
+        import mss
+        from PIL import Image
+
+        while not self._stop.is_set():
+            team = tuple(self.expected_team())
+            configs = self.settings.get("state_vision", {}).get("signals", {})
+            signals = {name: CHARACTER_SIGNALS.get(name, "") for name in team}
+            ready = all(
+                signal and configs.get(signal, {}).get("enabled")
+                and configs.get(signal, {}).get("roi_ratio")
+                and template_path(self.templates_dir, signal).exists()
+                for signal in signals.values()
+            )
+            if len(team) != 3 or not ready or not self.enabled():
+                self._stop.wait(0.5)
+                continue
+            try:
+                with mss.mss() as capture:
+                    monitor_index = int(self.settings.get("vision", {}).get("monitor_index", 1))
+                    monitor_index = max(1, min(monitor_index, len(capture.monitors) - 1))
+                    monitor = capture.monitors[monitor_index]
+                    templates = {
+                        name: Image.open(template_path(self.templates_dir, signal)).convert("RGB")
+                        for name, signal in signals.items()
+                    }
+                    try:
+                        scores: dict[tuple[int, str], float] = {}
+                        slot_images = []
+                        for slot in range(3):
+                            frame = capture.grab(self._box_roi(monitor, slot))
+                            slot_images.append(Image.frombytes("RGB", frame.size, frame.rgb))
+                        for slot, slot_image in enumerate(slot_images):
+                            for name, signal in signals.items():
+                                _left, _top, width, height = configs[signal]["roi_ratio"]
+                                target_size = (int(float(width) * monitor["width"]),
+                                               int(float(height) * monitor["height"]))
+                                scores[(slot, name)] = self._best_box_score(
+                                    slot_image, templates[name], target_size
+                                )
+                    finally:
+                        for image in templates.values():
+                            image.close()
+                order, chosen, margin = self.best_order(team, scores)
+                minimum = min(chosen.values())
+                average = sum(chosen.values()) / 3
+                confident = minimum >= 0.74 and average >= 0.80 and margin >= 0.08
+                if confident and order == self._last_order:
+                    self._streak += 1
+                elif confident:
+                    self._last_order = order
+                    self._streak = 1
+                else:
+                    self._last_order = None
+                    self._streak = 0
+                self.callback(order, chosen, self._streak >= 2)
+            except Exception:
+                self._last_order = None
+                self._streak = 0
+            self._stop.wait(0.45)
