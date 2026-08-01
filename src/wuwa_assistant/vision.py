@@ -22,6 +22,14 @@ OKWW_SIGNAL_CATEGORIES = {
     "suisui:forte3": ("suisui_forte3", "穗穗 Forte3", 0.84),
 }
 
+OKWW_PORTRAIT_CATEGORIES = {
+    "卡提希娅": "char_cartethyia",
+    "夏空": "char_ciaccona",
+    "千咲": "char_chisa",
+    "秧秧": "yangyang_sp",
+    "穗穗": "char_suisui",
+}
+
 
 def _safe_name(signal: str) -> str:
     digest = hashlib.sha1(signal.encode("utf-8")).hexdigest()[:12]
@@ -43,6 +51,57 @@ def _find_okww_repo(root: Path) -> Path:
         if (candidate / "assets" / "coco_annotations.json").exists():
             return candidate
     raise FileNotFoundError("未在所选目录找到 OK-WW 的 assets/coco_annotations.json")
+
+
+def import_okww_portraits(okww_root: Path, assets_dir: Path) -> dict[str, Path]:
+    """Create local UI portrait crops without redistributing OK-WW source assets."""
+    from PIL import Image
+
+    repo = _find_okww_repo(okww_root)
+    data = json.loads((repo / "assets" / "coco_annotations.json").read_text(encoding="utf-8"))
+    categories = {item["name"]: item["id"] for item in data.get("categories", [])}
+    images = {item["id"]: item for item in data.get("images", [])}
+    wanted = {name: categories.get(category) for name, category in OKWW_PORTRAIT_CATEGORIES.items()}
+    best: dict[int, dict] = {}
+    for annotation in data.get("annotations", []):
+        category_id = annotation.get("category_id")
+        if category_id not in wanted.values():
+            continue
+        area = float(annotation["bbox"][2]) * float(annotation["bbox"][3])
+        current = best.get(category_id)
+        if current is None or area > float(current["bbox"][2]) * float(current["bbox"][3]):
+            best[category_id] = annotation
+
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    imported: dict[str, Path] = {}
+    opened: dict[Path, Image.Image] = {}
+    try:
+        for name, category_id in wanted.items():
+            annotation = best.get(category_id) if category_id is not None else None
+            if not annotation:
+                continue
+            image_info = images.get(annotation["image_id"])
+            if not image_info:
+                continue
+            source = repo / "assets" / image_info["file_name"]
+            if source not in opened:
+                opened[source] = Image.open(source).convert("RGB")
+            image = opened[source]
+            x, y, width, height = (int(round(value)) for value in annotation["bbox"])
+            side = max(width, height)
+            center_x, center_y = x + width // 2, y + height // 2
+            left = max(0, min(image.width - side, center_x - side // 2))
+            top = max(0, min(image.height - side, center_y - side // 2))
+            crop = image.crop((left, top, left + side, top + side)).resize((192, 192), Image.Resampling.LANCZOS)
+            destination = assets_dir / f"portrait-{hashlib.sha1(name.encode('utf-8')).hexdigest()[:12]}.png"
+            crop.save(destination, optimize=True)
+            imported[name] = destination
+    finally:
+        for image in opened.values():
+            image.close()
+    if not imported:
+        raise ValueError("OK-WW 标注文件中没有找到支持的角色头像")
+    return imported
 
 
 def import_okww_templates(okww_root: Path, templates_dir: Path) -> dict[str, dict]:

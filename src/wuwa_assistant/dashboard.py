@@ -7,14 +7,20 @@ from dataclasses import asdict
 from pathlib import Path
 from tkinter import ttk
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageTk
 
 from .engine import ComboEngine
 from .foreground import enumerate_window_titles, is_game_foreground
 from .input_monitor import InputMonitor, VK_CODES
 from .models import ComboPreset, Cue, EngineView
 from .settings import SettingsStore
-from .vision import OKWW_SIGNAL_CATEGORIES, StateVisionMonitor, VisionMonitor, import_okww_templates
+from .vision import (
+    OKWW_SIGNAL_CATEGORIES,
+    StateVisionMonitor,
+    VisionMonitor,
+    import_okww_portraits,
+    import_okww_templates,
+)
 
 
 C = {
@@ -82,7 +88,11 @@ class DashboardApp:
         self.nav_rows: dict[str, tuple[tk.Frame, tk.Frame, tk.Label, tk.Label]] = {}
         self.current_page = "coach"
         self._restore_geometry = ""
+        self.character_asset_paths: dict[str, Path] = {}
+        self.character_photos: dict[tuple[str, int], ImageTk.PhotoImage] = {}
+        self._portrait_labels: list[tuple[tk.Label, str, int]] = []
 
+        self._auto_import_okww_portraits()
         self._build_window()
         self._build_battle_overlay()
         self._auto_import_okww_templates()
@@ -347,15 +357,70 @@ class DashboardApp:
             avatar = tk.Frame(card, bg=C["panel_alt"], width=132, height=58, highlightthickness=1, highlightbackground=C["border"])
             avatar.pack(side="left", padx=14, pady=18)
             avatar.pack_propagate(False)
-            _label(avatar, " · ".join(preset.team), size=8, color="#D8D0FF", weight="bold", wraplength=120, justify="center").pack(fill="both", expand=True, padx=5, pady=5)
+            self._build_character_strip(avatar, preset.team, size=38)
             text_box = tk.Frame(card, bg=C["panel"])
             text_box.pack(side="left", fill="y", pady=16)
             _label(text_box, preset.name.split(" · ", 1)[0], size=13, weight="bold", anchor="w").pack(anchor="w")
             _label(text_box, "启动轴  →  自动循环", size=10, color="#D8DDEC", anchor="w").pack(anchor="w", pady=(5, 0))
             self._team_cards[preset.id] = card
             self._team_chips[preset.id] = avatar
-            for widget in (card, avatar, *avatar.winfo_children(), text_box, *text_box.winfo_children()):
-                widget.bind("<Button-1>", lambda _e, pid=preset.id: self._choose_team(pid))
+            self._bind_tree(card, "<Button-1>", lambda _e, pid=preset.id: self._choose_team(pid))
+
+    def _character_photo(self, name: str, size: int) -> ImageTk.PhotoImage | None:
+        key = (name, size)
+        if key in self.character_photos:
+            return self.character_photos[key]
+        path = self.character_asset_paths.get(name)
+        if not path or not path.exists():
+            return None
+        try:
+            with Image.open(path) as source:
+                image = source.convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
+            mask = Image.new("L", (size, size), 0)
+            ImageDraw.Draw(mask).ellipse((1, 1, size - 2, size - 2), fill=255)
+            image.putalpha(mask)
+            photo = ImageTk.PhotoImage(image)
+        except OSError:
+            return None
+        self.character_photos[key] = photo
+        return photo
+
+    def _build_character_strip(self, parent: tk.Widget, team: tuple[str, ...], *, size: int,
+                               show_names: bool = False) -> tk.Frame:
+        strip = tk.Frame(parent, bg=str(parent.cget("bg")))
+        strip.pack(expand=True)
+        for name in team:
+            item = tk.Frame(strip, bg=str(parent.cget("bg")))
+            item.pack(side="left", padx=2)
+            photo = self._character_photo(name, size)
+            portrait = tk.Label(
+                item, image=photo or "", text="" if photo else name[:1], compound="center",
+                bg=str(parent.cget("bg")) if photo else C["panel_hot"], fg="#D8D0FF", bd=0,
+                font=("Microsoft YaHei UI", max(10, size // 3), "bold"),
+                width=size, height=size, highlightthickness=0 if photo else 1,
+                highlightbackground=C["border_hot"],
+            )
+            portrait.pack()
+            self._portrait_labels.append((portrait, name, size))
+            if show_names:
+                _label(item, name, size=9, color="#D8DDEC").pack(pady=(6, 0))
+        return strip
+
+    def _refresh_character_portraits(self) -> None:
+        self.character_photos.clear()
+        for label, name, size in self._portrait_labels:
+            photo = self._character_photo(name, size)
+            label.config(
+                image=photo or "", text="" if photo else name[:1],
+                bg=str(label.master.cget("bg")) if photo else C["panel_hot"],
+                highlightthickness=0 if photo else 1,
+            )
+
+    @staticmethod
+    def _bind_tree(widget: tk.Widget, event: str, callback) -> None:
+        widget.bind(event, callback)
+        for child in widget.winfo_children():
+            DashboardApp._bind_tree(child, event, callback)
 
     def _build_workspace(self, parent: tk.Frame) -> None:
         grid = tk.Frame(parent, bg=C["bg"])
@@ -476,7 +541,9 @@ class DashboardApp:
             card = tk.Frame(grid, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], cursor="hand2")
             card.grid(row=0, column=column, sticky="nsew", padx=(0, 10) if column == 0 else (10, 0), pady=(0, 18))
             self._team_page_cards[preset.id] = card
-            _label(card, "  ·  ".join(preset.team), size=16, color="#D8D0FF", weight="bold").pack(anchor="w", padx=26, pady=(30, 8))
+            portraits = tk.Frame(card, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
+            portraits.pack(fill="x", padx=26, pady=(26, 18), ipady=14)
+            self._build_character_strip(portraits, preset.team, size=68, show_names=True)
             _label(card, preset.name.split(" · ", 1)[0], size=24, weight="bold").pack(anchor="w", padx=26)
             _label(card, "启动轴完成后自动循环", size=11, color=C["green"]).pack(anchor="w", padx=26, pady=(8, 24))
             details = tk.Frame(card, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
@@ -489,8 +556,7 @@ class DashboardApp:
             _label(card, axis + ("  …" if len(preset.cues) > 10 else ""), size=11, wraplength=470, justify="left", anchor="w").pack(fill="x", padx=26, pady=(8, 28))
             choose = self._button(card, "使用这套连招", lambda pid=preset.id: self._select_team_from_page(pid), primary=True)
             choose.pack(anchor="w", padx=26, pady=(0, 28))
-            for widget in (card, *card.winfo_children()):
-                widget.bind("<Button-1>", lambda _e, pid=preset.id: self._select_team_from_page(pid))
+            self._bind_tree(card, "<Button-1>", lambda _e, pid=preset.id: self._select_team_from_page(pid))
 
     def _build_keys_page(self, parent: tk.Frame) -> None:
         self._page_header(parent, "键位设置", "录入你的游戏键位；程序只读取状态，不会拦截或发送按键")
@@ -1024,7 +1090,10 @@ class DashboardApp:
 
     def _import_okww_templates(self) -> None:
         try:
-            imported = import_okww_templates(Path(self.okww_path_var.get().strip()), self.store.templates_dir)
+            root = Path(self.okww_path_var.get().strip())
+            imported = import_okww_templates(root, self.store.templates_dir)
+            self.character_asset_paths = import_okww_portraits(root, self.store.assets_dir)
+            self._refresh_character_portraits()
             state = self.settings.setdefault("state_vision", {})
             state["signals"] = imported
             state["enabled"] = True
@@ -1034,7 +1103,10 @@ class DashboardApp:
             self.vision_enabled_var.set(True)
             self.store.save(self.settings)
             self._restart_monitors()
-            self.okww_status.config(text=f"✓ 已导入 {len(imported)} 项", fg=C["green"])
+            self.okww_status.config(
+                text=f"✓ 识别素材 {len(imported)} 项 · 头像 {len(self.character_asset_paths)} 个",
+                fg=C["green"],
+            )
         except Exception as exc:
             self.okww_status.config(text=f"导入失败：{exc}", fg=C["red"], width=34)
 
@@ -1057,6 +1129,16 @@ class DashboardApp:
             self.vision_enabled_var.set(True)
             self.okww_status.config(text=f"✓ 自动导入 {len(imported)} 项", fg=C["green"])
         self.store.save(self.settings)
+
+    def _auto_import_okww_portraits(self) -> None:
+        state = self.settings.setdefault("state_vision", {})
+        root = Path(str(state.get("okww_path", "F:\\Tools\\okww")))
+        if not root.exists():
+            return
+        try:
+            self.character_asset_paths = import_okww_portraits(root, self.store.assets_dir)
+        except (OSError, ValueError):
+            self.character_asset_paths = {}
 
     def _open_data_dir(self) -> None:
         self.store.root.mkdir(parents=True, exist_ok=True)

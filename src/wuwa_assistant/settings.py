@@ -66,6 +66,7 @@ class SettingsStore:
         self.root = root or app_data_dir()
         self.path = self.root / "settings.json"
         self.templates_dir = self.root / "templates"
+        self.assets_dir = self.root / "okww-assets"
 
     def load(self) -> dict[str, Any]:
         if not self.path.exists():

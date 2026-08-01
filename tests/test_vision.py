@@ -2,7 +2,14 @@ import json
 
 from PIL import Image
 
-from wuwa_assistant.vision import StateVisionMonitor, image_similarity, import_okww_templates, state_image_similarity, template_path
+from wuwa_assistant.vision import (
+    StateVisionMonitor,
+    image_similarity,
+    import_okww_portraits,
+    import_okww_templates,
+    state_image_similarity,
+    template_path,
+)
 
 
 def test_identical_frames_match_and_different_frames_do_not():
@@ -42,6 +49,28 @@ def test_imports_supported_template_from_local_okww_coco(tmp_path):
     assert imported["cartethyia:sword1"]["roi_ratio"] == [0.1, 0.2, 0.3, 0.4]
     with Image.open(template_path(templates, "cartethyia:sword1")) as crop:
         assert crop.size == (30, 40)
+
+
+def test_import_okww_portraits_selects_largest_square_crop(tmp_path):
+    repo = tmp_path / "okww" / "data" / "apps" / "ok-ww" / "repo"
+    assets = repo / "assets"
+    (assets / "images").mkdir(parents=True)
+    Image.new("RGB", (100, 80), "#334455").save(assets / "images" / "one.png")
+    annotations = {
+        "categories": [{"id": 7, "name": "char_cartethyia"}],
+        "images": [{"id": 3, "file_name": "images/one.png", "width": 100, "height": 80}],
+        "annotations": [
+            {"image_id": 3, "category_id": 7, "bbox": [10, 10, 8, 8]},
+            {"image_id": 3, "category_id": 7, "bbox": [30, 20, 30, 20]},
+        ],
+    }
+    (assets / "coco_annotations.json").write_text(json.dumps(annotations), encoding="utf-8")
+
+    imported = import_okww_portraits(tmp_path / "okww", tmp_path / "portraits")
+
+    assert set(imported) == {"卡提希娅"}
+    with Image.open(imported["卡提希娅"]) as portrait:
+        assert portrait.size == (192, 192)
 
 
 def test_state_roi_scales_to_selected_monitor():
