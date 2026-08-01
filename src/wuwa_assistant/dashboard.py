@@ -122,6 +122,7 @@ class DashboardApp:
         self.context_menu.add_command(label="下一步（调试）", command=lambda: self.engine.step(1))
         self.context_menu.add_command(label="从启动轴重新开始", command=self.engine.reset)
         self.context_menu.add_separator()
+        self.context_menu.add_command(label="查看完整按键轴", command=self._open_full_axis_event)
         self.context_menu.add_command(label="显示 / 隐藏战斗悬浮提示", command=self._toggle_battle_overlay_enabled)
         self.context_menu.add_command(label="设置", command=self.open_settings)
         self.context_menu.add_command(label="隐藏到托盘", command=self.hide_overlay)
@@ -220,6 +221,7 @@ class DashboardApp:
 
         nav = (
             ("coach", "◆", "选择教练"),
+            ("axis", "≡", "完整按键轴"),
             ("teams", "◇", "队伍选择"),
             ("keys", "⌨", "键位设置"),
             ("prompts", "◉", "提示设置"),
@@ -228,8 +230,8 @@ class DashboardApp:
             ("about", "i", "关于"),
         )
         for page_id, icon, text in nav:
-            row = tk.Frame(side, bg=C["sidebar"], height=66, cursor="hand2")
-            row.pack(fill="x", pady=(18 if text == "选择教练" else 0, 0))
+            row = tk.Frame(side, bg=C["sidebar"], height=58, cursor="hand2")
+            row.pack(fill="x", pady=(10 if text == "选择教练" else 0, 0))
             row.pack_propagate(False)
             accent = tk.Frame(row, bg=C["sidebar"], width=4)
             accent.pack(side="left", fill="y")
@@ -253,6 +255,7 @@ class DashboardApp:
     def _build_pages(self) -> None:
         builders = (
             ("coach", self._build_coach_page),
+            ("axis", self._build_axis_page),
             ("teams", self._build_teams_page),
             ("keys", self._build_keys_page),
             ("prompts", self._build_prompts_page),
@@ -269,6 +272,45 @@ class DashboardApp:
     def _build_coach_page(self, parent: tk.Frame) -> None:
         self._build_team_row(parent)
         self._build_workspace(parent)
+
+    def _build_axis_page(self, parent: tk.Frame) -> None:
+        self._page_header(parent, "完整按键轴", "查看当前队伍的全部启动操作和后续循环操作")
+        head = tk.Frame(parent, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"])
+        head.pack(fill="x", pady=(0, 14))
+        self.axis_team_label = _label(head, "", size=12, weight="bold", anchor="w")
+        self.axis_team_label.pack(side="left", padx=20, pady=14)
+        _label(head, "A = 左键普攻   ·   Z = 长按左键重击", size=9, color=C["muted"]).pack(side="right", padx=20)
+
+        columns = tk.Frame(parent, bg=C["bg"])
+        columns.pack(fill="both", expand=True)
+        columns.grid_columnconfigure(0, weight=1, uniform="axis")
+        columns.grid_columnconfigure(1, weight=1, uniform="axis")
+        columns.grid_rowconfigure(0, weight=1)
+        self.axis_texts: list[tk.Text] = []
+        self.axis_titles: list[tk.Label] = []
+        for column, title in enumerate(("启动轴（仅一次）", "循环轴（自动重复）")):
+            card = tk.Frame(columns, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"])
+            card.grid(row=0, column=column, sticky="nsew", padx=(0, 8) if column == 0 else (8, 0))
+            title_label = _label(card, title, size=12, weight="bold", anchor="w")
+            title_label.pack(fill="x", padx=18, pady=(16, 10))
+            self.axis_titles.append(title_label)
+            holder = tk.Frame(card, bg=C["panel"])
+            holder.pack(fill="both", expand=True, padx=18, pady=(0, 18))
+            scrollbar = tk.Scrollbar(holder, orient="vertical", bg=C["panel_alt"], troughcolor=C["panel"], activebackground=C["purple"])
+            scrollbar.pack(side="right", fill="y")
+            text_widget = tk.Text(
+                holder, bg=C["panel_alt"], fg=C["text"], relief="flat", bd=0,
+                highlightthickness=1, highlightbackground=C["border"], padx=14, pady=12,
+                font=("Microsoft YaHei UI", 10), wrap="word", spacing1=2, spacing3=3,
+                yscrollcommand=scrollbar.set, cursor="arrow",
+            )
+            text_widget.pack(side="left", fill="both", expand=True)
+            text_widget.tag_configure("segment", foreground="#BFAAFF", font=("Microsoft YaHei UI", 10, "bold"), spacing1=10, spacing3=4)
+            text_widget.tag_configure("step", foreground=C["dim"], font=("Segoe UI", 9, "normal"))
+            text_widget.tag_configure("key", foreground=C["text"], font=("Microsoft YaHei UI", 11, "bold"))
+            scrollbar.config(command=text_widget.yview)
+            self.axis_texts.append(text_widget)
+        self._refresh_axis_page()
 
     def _page_header(self, parent: tk.Frame, title: str, subtitle: str) -> None:
         box = tk.Frame(parent, bg=C["bg"], height=84)
@@ -600,11 +642,43 @@ class DashboardApp:
         preset_id = str(self.settings.get("preset_id", "kaxiaqian-startup"))
         if preset_id in self.engine.presets:
             self.engine.select(preset_id)
+        self._refresh_axis_page()
 
     def _choose_team(self, preset_id: str) -> None:
         self.settings["preset_id"] = preset_id
         self.store.save(self.settings)
         self.engine.select(preset_id)
+        self._refresh_axis_page()
+
+    def _refresh_axis_page(self) -> None:
+        if not hasattr(self, "axis_texts"):
+            return
+        startup_id = self.engine.preset.id.replace("-cycle", "-startup")
+        startup = self.engine.presets[startup_id]
+        cycle = self.engine.presets.get(startup.next_preset_id)
+        self.axis_team_label.config(text=f"{'  ·  '.join(startup.team)}   /   {startup.name.split(' · ', 1)[0]}")
+        for text_widget, preset in zip(self.axis_texts, (startup, cycle)):
+            text_widget.config(state="normal")
+            text_widget.delete("1.0", "end")
+            if preset is None:
+                text_widget.insert("end", "暂无循环轴")
+            else:
+                self._write_axis(text_widget, preset)
+            text_widget.config(state="disabled")
+            text_widget.yview_moveto(0)
+
+    @staticmethod
+    def _write_axis(text_widget: tk.Text, preset: ComboPreset) -> None:
+        previous_segment = ""
+        for index, cue in enumerate(preset.cues, start=1):
+            if cue.segment != previous_segment:
+                if previous_segment:
+                    text_widget.insert("end", "\n")
+                text_widget.insert("end", f"{cue.character} · {cue.segment}\n", "segment")
+                previous_segment = cue.segment
+            text_widget.insert("end", f"{index:02d}  ", "step")
+            text_widget.insert("end", f"{cue.display_key}", "key")
+            text_widget.insert("end", f"    {cue.character}\n")
 
     def _restart_monitors(self) -> None:
         if self.input_monitor:
@@ -654,6 +728,7 @@ class DashboardApp:
                 if command == "show": self.show_overlay()
                 elif command == "settings": self.open_settings()
                 elif command == "reset": self.engine.reset()
+                elif command == "open_axis": self._open_full_axis_event()
                 elif command == "toggle_float": self._toggle_battle_overlay_enabled()
                 elif command == "quit": self.shutdown(); return
         self._render(self.engine.view())
@@ -707,6 +782,11 @@ class DashboardApp:
         canvas.create_line(14, 18, 14, 99, fill=C["purple"], width=4)
         shadow_text(33, 26, character, font=("Microsoft YaHei UI", 13, "bold"), fill="#D8D0FF")
         shadow_text(33, 76, key, font=("Microsoft YaHei UI", key_size, "bold"))
+        canvas.create_rectangle(225, 6, 326, 46, fill=C["panel_alt"], outline=C["purple"], width=2, tags=("axis_button",))
+        canvas.create_text(275, 26, text="全部按键", fill=C["text"], font=("Microsoft YaHei UI", 10, "bold"), tags=("axis_button",))
+        canvas.tag_bind("axis_button", "<ButtonRelease-1>", self._open_full_axis_event)
+        canvas.tag_bind("axis_button", "<Enter>", lambda _event: canvas.config(cursor="hand2"))
+        canvas.tag_bind("axis_button", "<Leave>", lambda _event: canvas.config(cursor="fleur"))
 
     def _overlay_key(self, cue: Cue) -> str:
         if cue.action == "basic":
@@ -809,6 +889,8 @@ class DashboardApp:
             text.config(bg=bg, fg=C["text"] if active else "#C1C9D8", font=("Microsoft YaHei UI", 11, "bold" if active else "normal"))
         if page_id in {"coach", "teams"}:
             self._style_team_cards()
+        if page_id == "axis":
+            self._refresh_axis_page()
 
     def _select_team_from_page(self, preset_id: str) -> None:
         self._choose_team(preset_id)
@@ -936,6 +1018,11 @@ class DashboardApp:
     def _show_context_menu(self, event: tk.Event) -> None:
         self.context_menu.tk_popup(event.x_root, event.y_root)
 
+    def _open_full_axis_event(self, _event: tk.Event | None = None) -> str:
+        self.show_overlay()
+        self._show_page("axis")
+        return "break"
+
     def _toggle_battle_overlay_enabled(self) -> None:
         overlay = self.settings.setdefault("overlay", {})
         overlay["enabled"] = not bool(overlay.get("enabled", True))
@@ -963,6 +1050,7 @@ class DashboardApp:
             menu = pystray.Menu(
                 pystray.MenuItem("显示控制台", lambda: self.events.put(("command", "show")), default=True),
                 pystray.MenuItem("设置", lambda: self.events.put(("command", "settings"))),
+                pystray.MenuItem("查看完整按键轴", lambda: self.events.put(("command", "open_axis"))),
                 pystray.MenuItem("显示 / 隐藏战斗悬浮提示", lambda: self.events.put(("command", "toggle_float"))),
                 pystray.MenuItem("从启动轴重新开始", lambda: self.events.put(("command", "reset"))),
                 pystray.MenuItem("退出", lambda: self.events.put(("command", "quit"))),
