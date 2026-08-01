@@ -1,0 +1,21 @@
+import json
+
+from wuwa_assistant.settings import SettingsStore
+
+
+def test_settings_merge_defaults_and_roundtrip(tmp_path):
+    store = SettingsStore(tmp_path)
+    store.path.write_text(json.dumps({"opacity": 0.8, "keymap": {"skill": "G"}}), encoding="utf-8")
+    settings = store.load()
+    assert settings["opacity"] == 0.8
+    assert settings["keymap"]["skill"] == "G"
+    assert settings["keymap"]["basic"] == "MOUSE_LEFT"
+    store.save(settings)
+    assert store.load() == settings
+
+
+def test_export_presets(tmp_path):
+    store = SettingsStore(tmp_path)
+    path = store.export_presets([{"id": "one"}])
+    assert json.loads(path.read_text(encoding="utf-8")) == [{"id": "one"}]
+

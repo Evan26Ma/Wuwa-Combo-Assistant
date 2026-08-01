@@ -1,0 +1,18 @@
+[project]
+name = "wuwa-combo-assistant"
+version = "0.1.0"
+description = "鸣潮零额外按键逐键教练"
+requires-python = ">=3.11"
+dependencies = [
+  "mss>=10.0,<11",
+  "Pillow>=10.4,<12",
+  "pystray>=0.19,<1",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.16,<7", "setuptools>=75"]
+test = ["pytest>=8,<9"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
