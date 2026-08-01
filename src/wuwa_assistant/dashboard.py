@@ -3,16 +3,16 @@ from __future__ import annotations
 import queue
 import threading
 import tkinter as tk
-from tkinter import messagebox
+from dataclasses import asdict
+from tkinter import ttk
 
 from PIL import Image, ImageDraw
 
 from .engine import ComboEngine
-from .foreground import is_game_foreground
-from .input_monitor import InputMonitor
+from .foreground import enumerate_window_titles, is_game_foreground
+from .input_monitor import InputMonitor, VK_CODES
 from .models import ComboPreset, Cue, EngineView
 from .settings import SettingsStore
-from .ui import SettingsDialog
 from .vision import VisionMonitor
 
 
@@ -73,6 +73,10 @@ class DashboardApp:
         self._last_active: bool | None = None
         self._team_cards: dict[str, tk.Frame] = {}
         self._team_chips: dict[str, tk.Frame] = {}
+        self._team_page_cards: dict[str, tk.Frame] = {}
+        self.pages: dict[str, tk.Frame] = {}
+        self.nav_rows: dict[str, tuple[tk.Frame, tk.Frame, tk.Label, tk.Label]] = {}
+        self.current_page = "coach"
         self._restore_geometry = ""
 
         self._build_window()
@@ -80,7 +84,7 @@ class DashboardApp:
         self._restart_monitors()
         self._start_tray()
         if not self.settings.get("calibration_completed", False):
-            self.root.after(450, self.open_settings)
+            self.root.after(450, lambda: self._show_page("keys"))
         self.root.after(40, self._ui_loop)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_overlay)
 
@@ -106,10 +110,10 @@ class DashboardApp:
         body = tk.Frame(shell, bg=C["bg"])
         body.pack(fill="both", expand=True)
         self._build_sidebar(body)
-        content = tk.Frame(body, bg=C["bg"])
-        content.pack(side="left", fill="both", expand=True, padx=(22, 24), pady=(14, 18))
-        self._build_team_row(content)
-        self._build_workspace(content)
+        self.page_host = tk.Frame(body, bg=C["bg"])
+        self.page_host.pack(side="left", fill="both", expand=True, padx=(22, 24), pady=(14, 18))
+        self._build_pages()
+        self._show_page("coach")
 
         self.context_menu = tk.Menu(self.root, tearoff=0)
         self.context_menu.add_command(label="上一步（调试）", command=lambda: self.engine.step(-1))
@@ -167,34 +171,76 @@ class DashboardApp:
         side.pack_propagate(False)
 
         nav = (
-            ("◆", "选择教练", None, True),
-            ("◇", "队伍选择", self._focus_teams, False),
-            ("⌨", "键位设置", self.open_settings, False),
-            ("◉", "提示设置", self.open_settings, False),
-            ("▣", "画面识别", self.open_settings, False),
-            ("?", "使用帮助", self._show_help, False),
-            ("i", "关于", self._show_about, False),
+            ("coach", "◆", "选择教练"),
+            ("teams", "◇", "队伍选择"),
+            ("keys", "⌨", "键位设置"),
+            ("prompts", "◉", "提示设置"),
+            ("vision", "▣", "画面识别"),
+            ("help", "?", "使用帮助"),
+            ("about", "i", "关于"),
         )
-        for icon, text, command, active in nav:
-            row = tk.Frame(side, bg=C["panel_hot"] if active else C["sidebar"], height=66, cursor="hand2")
+        for page_id, icon, text in nav:
+            row = tk.Frame(side, bg=C["sidebar"], height=66, cursor="hand2")
             row.pack(fill="x", pady=(18 if text == "选择教练" else 0, 0))
             row.pack_propagate(False)
-            if active:
-                tk.Frame(row, bg=C["purple"], width=4).pack(side="left", fill="y")
-            _label(row, icon, size=14, color=C["purple"] if active else C["muted"], width=3).pack(side="left", padx=(13, 1))
-            _label(row, text, size=11, weight="bold" if active else "normal", color=C["text"] if active else "#C1C9D8", anchor="w").pack(side="left", fill="x", expand=True)
-            if command:
-                for widget in (row, *row.winfo_children()):
-                    widget.bind("<Button-1>", lambda _e, fn=command: fn())
+            accent = tk.Frame(row, bg=C["sidebar"], width=4)
+            accent.pack(side="left", fill="y")
+            icon_label = _label(row, icon, size=14, color=C["muted"], width=3)
+            icon_label.pack(side="left", padx=(13, 1))
+            text_label = _label(row, text, size=11, color="#C1C9D8", anchor="w")
+            text_label.pack(side="left", fill="x", expand=True)
+            self.nav_rows[page_id] = (row, accent, icon_label, text_label)
+            for widget in (row, accent, icon_label, text_label):
+                widget.bind("<Button-1>", lambda _e, pid=page_id: self._show_page(pid))
 
         status = tk.Frame(side, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
         status.pack(side="bottom", fill="x", padx=14, pady=14)
         _label(status, "●  运行中", size=10, color=C["green"], weight="bold", anchor="w").pack(fill="x", padx=14, pady=(14, 4))
-        _label(status, "v1.1.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
+        _label(status, "v1.2.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
         _label(status, "不上传任何数据", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14, pady=(2, 12))
         spark = tk.Canvas(status, height=22, bg=C["panel_alt"], highlightthickness=0)
         spark.pack(fill="x", padx=12, pady=(0, 8))
         spark.create_line(0, 17, 30, 17, 48, 14, 70, 17, 88, 8, 104, 12, 122, 3, 142, 9, fill=C["blue"], width=1)
+
+    def _build_pages(self) -> None:
+        builders = (
+            ("coach", self._build_coach_page),
+            ("teams", self._build_teams_page),
+            ("keys", self._build_keys_page),
+            ("prompts", self._build_prompts_page),
+            ("vision", self._build_vision_page),
+            ("help", self._build_help_page),
+            ("about", self._build_about_page),
+        )
+        for page_id, builder in builders:
+            page = tk.Frame(self.page_host, bg=C["bg"])
+            page.place(relx=0, rely=0, relwidth=1, relheight=1)
+            self.pages[page_id] = page
+            builder(page)
+
+    def _build_coach_page(self, parent: tk.Frame) -> None:
+        self._build_team_row(parent)
+        self._build_workspace(parent)
+
+    def _page_header(self, parent: tk.Frame, title: str, subtitle: str) -> None:
+        box = tk.Frame(parent, bg=C["bg"], height=84)
+        box.pack(fill="x")
+        box.pack_propagate(False)
+        _label(box, title, size=20, weight="bold", anchor="w").pack(fill="x", pady=(4, 4))
+        _label(box, subtitle, size=10, color=C["muted"], anchor="w").pack(fill="x")
+
+    def _section(self, parent: tk.Widget, *, pady: tuple[int, int] = (0, 16)) -> tk.Frame:
+        frame = tk.Frame(parent, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"])
+        frame.pack(fill="x", pady=pady)
+        return frame
+
+    def _button(self, parent: tk.Widget, text: str, command, *, primary: bool = False) -> tk.Button:
+        return tk.Button(
+            parent, text=text, command=command, relief="flat", bd=0, cursor="hand2",
+            bg=C["purple2"] if primary else C["panel_alt"], fg="white" if primary else C["text"],
+            activebackground=C["purple"], activeforeground="white", padx=18, pady=9,
+            font=("Microsoft YaHei UI", 9, "bold" if primary else "normal"),
+        )
 
     def _build_team_row(self, parent: tk.Frame) -> None:
         row = tk.Frame(parent, bg=C["bg"], height=98)
@@ -325,6 +371,180 @@ class DashboardApp:
             _label(card, f"✓  {text}", size=8, color=C["green"], anchor="w").pack(fill="x", padx=18, pady=2)
         tk.Frame(card, bg=C["panel"], height=5).pack()
 
+    # ---------- integrated pages ----------
+    def _build_teams_page(self, parent: tk.Frame) -> None:
+        self._page_header(parent, "队伍选择", "选择启动轴即可；完成后程序会自动接入对应循环轴")
+        grid = tk.Frame(parent, bg=C["bg"])
+        grid.pack(fill="both", expand=True)
+        startups = [preset for preset in self.presets if preset.phase == "启动"]
+        for column, preset in enumerate(startups):
+            grid.grid_columnconfigure(column, weight=1, uniform="teams")
+            card = tk.Frame(grid, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"], cursor="hand2")
+            card.grid(row=0, column=column, sticky="nsew", padx=(0, 10) if column == 0 else (10, 0), pady=(0, 18))
+            self._team_page_cards[preset.id] = card
+            _label(card, "  ·  ".join(preset.team), size=16, color="#D8D0FF", weight="bold").pack(anchor="w", padx=26, pady=(30, 8))
+            _label(card, preset.name.split(" · ", 1)[0], size=24, weight="bold").pack(anchor="w", padx=26)
+            _label(card, "启动轴完成后自动循环", size=11, color=C["green"]).pack(anchor="w", padx=26, pady=(8, 24))
+            details = tk.Frame(card, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
+            details.pack(fill="x", padx=26, pady=(0, 20))
+            cycle = self.engine.presets.get(preset.next_preset_id or "")
+            _label(details, f"启动轴  {len(preset.cues)} 步", size=10, anchor="w").pack(fill="x", padx=16, pady=(14, 4))
+            _label(details, f"循环轴  {len(cycle.cues) if cycle else 0} 步 / 无限循环", size=10, color=C["muted"], anchor="w").pack(fill="x", padx=16, pady=(0, 14))
+            _label(card, "按键概览", size=10, color=C["muted"], anchor="w").pack(fill="x", padx=26)
+            axis = "  →  ".join(cue.display_key for cue in preset.cues[:10])
+            _label(card, axis + ("  …" if len(preset.cues) > 10 else ""), size=11, wraplength=470, justify="left", anchor="w").pack(fill="x", padx=26, pady=(8, 28))
+            choose = self._button(card, "使用这套连招", lambda pid=preset.id: self._select_team_from_page(pid), primary=True)
+            choose.pack(anchor="w", padx=26, pady=(0, 28))
+            for widget in (card, *card.winfo_children()):
+                widget.bind("<Button-1>", lambda _e, pid=preset.id: self._select_team_from_page(pid))
+
+    def _build_keys_page(self, parent: tk.Frame) -> None:
+        self._page_header(parent, "键位设置", "录入你的游戏键位；程序只读取状态，不会拦截或发送按键")
+        card = self._section(parent)
+        _label(card, "战斗键位", size=13, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(20, 4))
+        _label(card, "点击下拉框选择当前在鸣潮中使用的键位", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=22, pady=(0, 14))
+        fields = tk.Frame(card, bg=C["panel"])
+        fields.pack(fill="x", padx=22)
+        actions = (
+            ("basic", "普攻"), ("heavy", "重击（与普攻相同时自动识别长按）"),
+            ("skill", "共鸣技能 E"), ("echo", "声骸技能 Q"),
+            ("liberation", "共鸣解放 R"), ("utility", "交互 / 钩锁 F"),
+            ("jump", "跳跃"), ("dodge", "闪避"),
+            ("forward", "前进"), ("slot1", "切人 1"),
+            ("slot2", "切人 2"), ("slot3", "切人 3"),
+        )
+        self.key_vars: dict[str, tk.StringVar] = {}
+        choices = sorted(VK_CODES, key=lambda value: (len(value), value))
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure("Dark.TCombobox", fieldbackground=C["panel_alt"], background=C["panel_alt"], foreground=C["text"], arrowcolor=C["muted"], bordercolor=C["border"], lightcolor=C["border"], darkcolor=C["border"])
+        style.map("Dark.TCombobox", fieldbackground=[("readonly", C["panel_alt"])], foreground=[("readonly", C["text"])])
+        for index, (action, label) in enumerate(actions):
+            row, column = divmod(index, 2)
+            cell = tk.Frame(fields, bg=C["panel"])
+            cell.grid(row=row, column=column, sticky="ew", padx=(0, 28) if column == 0 else (0, 0), pady=7)
+            fields.grid_columnconfigure(column, weight=1, uniform="keys")
+            _label(cell, label, size=9, color="#D3D9E5", anchor="w", width=25).pack(side="left")
+            var = tk.StringVar(value=str(self.settings["keymap"].get(action, "")))
+            self.key_vars[action] = var
+            ttk.Combobox(cell, textvariable=var, values=choices, state="readonly", width=18, style="Dark.TCombobox").pack(side="right", fill="x", expand=True)
+        foot = tk.Frame(card, bg=C["panel"])
+        foot.pack(fill="x", padx=22, pady=(14, 20))
+        _label(foot, "长按判定阈值", size=10, anchor="w").pack(side="left")
+        self.heavy_hold_var = tk.IntVar(value=int(self.settings.get("heavy_hold_ms", 360)))
+        tk.Spinbox(foot, from_=180, to=1000, increment=10, textvariable=self.heavy_hold_var, width=7, bg=C["panel_alt"], fg=C["text"], buttonbackground=C["panel_alt"], relief="flat", insertbackground="white").pack(side="left", padx=(14, 5), ipady=5)
+        _label(foot, "毫秒", size=9, color=C["muted"]).pack(side="left")
+        self.key_save_status = _label(foot, "", size=9, color=C["green"])
+        self.key_save_status.pack(side="right", padx=(0, 14))
+        self._button(foot, "保存并重新监听", self._save_keys, primary=True).pack(side="right")
+
+    def _build_prompts_page(self, parent: tk.Frame) -> None:
+        self._page_header(parent, "提示设置", "控制悬浮窗行为、监听范围和操作反馈")
+        general = self._section(parent)
+        _label(general, "监听与反馈", size=13, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(20, 10))
+        self.only_game_var = tk.BooleanVar(value=bool(self.settings.get("only_when_game_active", True)))
+        self.sound_var = tk.BooleanVar(value=bool(self.settings.get("sound_enabled", False)))
+        self._check(general, "仅在鸣潮位于前台时监听", self.only_game_var, "切出游戏后自动暂停，避免把日常键盘操作当作连招").pack(fill="x", padx=22, pady=6)
+        self._check(general, "每次正确推进时播放提示音", self.sound_var, "默认关闭；不会播放语音或持续音效").pack(fill="x", padx=22, pady=6)
+        alpha = tk.Frame(general, bg=C["panel"])
+        alpha.pack(fill="x", padx=22, pady=(12, 20))
+        _label(alpha, "窗口透明度", size=10, anchor="w", width=18).pack(side="left")
+        self.opacity_var = tk.DoubleVar(value=float(self.settings.get("opacity", .94)))
+        tk.Scale(alpha, from_=.72, to=1.0, resolution=.01, orient="horizontal", showvalue=False, variable=self.opacity_var, command=self._preview_opacity, bg=C["panel"], fg=C["text"], troughcolor=C["panel_alt"], activebackground=C["purple"], highlightthickness=0, bd=0).pack(side="left", fill="x", expand=True, padx=(10, 16))
+        self.opacity_value = _label(alpha, f"{self.opacity_var.get():.0%}", size=10, color="#D8D0FF", width=6)
+        self.opacity_value.pack(side="right")
+
+        titles = self._section(parent)
+        _label(titles, "游戏窗口识别", size=13, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(20, 4))
+        _label(titles, "每行一个可能的窗口标题关键词", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=22, pady=(0, 10))
+        row = tk.Frame(titles, bg=C["panel"])
+        row.pack(fill="x", padx=22, pady=(0, 20))
+        self.title_text = tk.Text(row, height=3, bg=C["panel_alt"], fg=C["text"], insertbackground="white", relief="flat", highlightthickness=1, highlightbackground=C["border"], font=("Microsoft YaHei UI", 9), padx=10, pady=8)
+        self.title_text.pack(side="left", fill="x", expand=True)
+        self.title_text.insert("1.0", "\n".join(self.settings.get("game_titles", [])))
+        actions = tk.Frame(row, bg=C["panel"])
+        actions.pack(side="right", padx=(14, 0))
+        self._button(actions, "读取当前窗口", self._pick_game_window).pack(fill="x", pady=(0, 8))
+        self.prompt_save_status = _label(actions, "", size=9, color=C["green"])
+        self.prompt_save_status.pack(pady=(3, 0))
+        self._button(actions, "保存设置", self._save_prompts, primary=True).pack(fill="x", pady=(8, 0))
+
+    def _build_vision_page(self, parent: tk.Frame) -> None:
+        self._page_header(parent, "画面识别", "可选增强：只辅助确认角色和少量稳定 HUD，不决定连招是否推进")
+        card = self._section(parent)
+        self.vision_enabled_var = tk.BooleanVar(value=bool(self.settings.get("vision_enabled", True)))
+        self._check(card, "启用保守画面识别", self.vision_enabled_var, "关闭后仍可完整使用按键辅助和锚点同步").pack(fill="x", padx=22, pady=(20, 12))
+        _label(card, "识别区域（屏幕像素）", size=11, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(6, 10))
+        roi = self.settings.get("vision", {}).get("roi", {})
+        self.roi_vars = {name: tk.IntVar(value=int(roi.get(name, default))) for name, default in (("left", 0), ("top", 0), ("width", 320), ("height", 180))}
+        fields = tk.Frame(card, bg=C["panel"])
+        fields.pack(fill="x", padx=22)
+        for column, (name, label) in enumerate((("left", "左 X"), ("top", "上 Y"), ("width", "宽度"), ("height", "高度"))):
+            cell = tk.Frame(fields, bg=C["panel"])
+            cell.grid(row=0, column=column, sticky="ew", padx=(0, 12 if column < 3 else 0))
+            fields.grid_columnconfigure(column, weight=1)
+            _label(cell, label, size=9, color=C["muted"], anchor="w").pack(fill="x")
+            tk.Entry(cell, textvariable=self.roi_vars[name], bg=C["panel_alt"], fg=C["text"], insertbackground="white", relief="flat", highlightthickness=1, highlightbackground=C["border"], font=("Segoe UI", 10), justify="center").pack(fill="x", ipady=7, pady=(5, 0))
+        threshold = tk.Frame(card, bg=C["panel"])
+        threshold.pack(fill="x", padx=22, pady=(18, 20))
+        _label(threshold, "匹配阈值", size=10, anchor="w").pack(side="left")
+        self.threshold_var = tk.DoubleVar(value=float(self.settings.get("vision", {}).get("match_threshold", .86)))
+        tk.Scale(threshold, from_=.60, to=.98, resolution=.01, orient="horizontal", variable=self.threshold_var, showvalue=True, bg=C["panel"], fg=C["text"], troughcolor=C["panel_alt"], activebackground=C["purple"], highlightthickness=0, bd=0, length=260).pack(side="left", padx=14)
+        self._button(threshold, "保存识别设置", self._save_vision, primary=True).pack(side="right")
+
+        capture = self._section(parent)
+        _label(capture, "采集角色 / HUD 模板", size=13, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(20, 4))
+        _label(capture, "先把识别区域对准稳定 HUD，再选择当前角色并采集。模板只保存在本机。", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=22, pady=(0, 14))
+        row = tk.Frame(capture, bg=C["panel"])
+        row.pack(fill="x", padx=22, pady=(0, 20))
+        characters = sorted({character for preset in self.presets for character in preset.team})
+        self.template_character_var = tk.StringVar(value=characters[0] if characters else "当前角色")
+        ttk.Combobox(row, textvariable=self.template_character_var, values=characters, state="readonly", width=20, style="Dark.TCombobox").pack(side="left", ipady=5)
+        self._button(row, "采集当前区域", self._capture_template, primary=True).pack(side="left", padx=12)
+        self.vision_status = _label(row, "未采集", size=9, color=C["muted"], anchor="w")
+        self.vision_status.pack(side="left", fill="x", expand=True)
+
+    def _build_help_page(self, parent: tk.Frame) -> None:
+        self._page_header(parent, "使用帮助", "不需要额外脚本热键，进入战斗后按你原本的方式操作")
+        steps = (
+            ("1", "开战前选择队伍", "选择卡夏千或秧千穗；程序先执行启动轴，完成后自动进入循环轴。"),
+            ("2", "看下一键并正常操作", "中央大字显示下一步按键。正确输入后自动推进，不要求确认。"),
+            ("3", "错键时继续打", "普通错键不会停住程序；它会保持低置信度跟随，等待唯一锚点恢复。"),
+            ("4", "长按按够时长", "普攻和重击共用鼠标左键时，程序通过按住时长区分。可在键位设置修改阈值。"),
+        )
+        for number, title, body in steps:
+            card = self._section(parent, pady=(0, 12))
+            badge = _label(card, number, size=13, weight="bold", color="white", bg=C["purple2"], width=3, pady=7)
+            badge.pack(side="left", padx=20, pady=18)
+            text = tk.Frame(card, bg=C["panel"])
+            text.pack(side="left", fill="x", expand=True, pady=16)
+            _label(text, title, size=11, weight="bold", anchor="w").pack(fill="x")
+            _label(text, body, size=9, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", pady=(5, 0))
+
+    def _build_about_page(self, parent: tk.Frame) -> None:
+        self._page_header(parent, "关于", "鸣潮连招辅助 · Windows 离线逐键教练")
+        card = self._section(parent)
+        _label(card, "鸣潮 · 连招教练", size=25, weight="bold", anchor="w").pack(fill="x", padx=28, pady=(28, 7))
+        _label(card, "v1.2.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
+        _label(card, "本程序只读取你配置的按键状态，不拦截、不模拟、不修改游戏输入。", size=11, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", padx=28, pady=(18, 20))
+        for text in ("✓  完全离线运行", "✓  不保存完整按键日志", "✓  截图和识别模板仅保存在本机", "✓  启动轴完成后自动进入循环轴"):
+            _label(card, text, size=10, color=C["green"], anchor="w").pack(fill="x", padx=28, pady=4)
+        actions = tk.Frame(card, bg=C["panel"])
+        actions.pack(fill="x", padx=28, pady=(22, 28))
+        self._button(actions, "打开配置目录", self._open_data_dir).pack(side="left")
+        self._button(actions, "导出连招数据", self._export_combo_data).pack(side="left", padx=10)
+        self.about_status = _label(actions, "", size=9, color=C["green"])
+        self.about_status.pack(side="left", padx=8)
+
+    def _check(self, parent: tk.Widget, title: str, variable: tk.BooleanVar, subtitle: str) -> tk.Frame:
+        row = tk.Frame(parent, bg=C["panel"])
+        tk.Checkbutton(row, variable=variable, bg=C["panel"], activebackground=C["panel"], selectcolor=C["purple2"], bd=0, highlightthickness=0, cursor="hand2").pack(side="left", padx=(0, 10))
+        text = tk.Frame(row, bg=C["panel"])
+        text.pack(side="left", fill="x", expand=True)
+        _label(text, title, size=10, weight="bold", anchor="w").pack(fill="x")
+        _label(text, subtitle, size=8, color=C["muted"], anchor="w").pack(fill="x", pady=(2, 0))
+        return row
+
     # ---------- state and rendering ----------
     def _select_initial_preset(self) -> None:
         preset_id = str(self.settings.get("preset_id", "kaxiaqian-startup"))
@@ -429,6 +649,9 @@ class DashboardApp:
             chip.config(bg=C["panel_alt"], highlightbackground=C["border_hot"] if active else C["border"])
             for child in chip.winfo_children():
                 child.config(bg=C["panel_alt"])
+        for preset_id, card in self._team_page_cards.items():
+            active = preset_id == selected
+            card.config(highlightbackground=C["border_hot"] if active else C["border"], highlightthickness=2 if active else 1)
 
     def _draw_action_rule(self, _event=None) -> None:
         c = self.action_rule
@@ -484,18 +707,105 @@ class DashboardApp:
         canvas.create_text(w - 8, y, text="•••", anchor="e", fill=C["muted"], font=("Segoe UI", 12))
 
     # ---------- interactions ----------
-    def _focus_teams(self) -> None:
-        self.root.lift()
+    def _show_page(self, page_id: str) -> None:
+        page = self.pages.get(page_id)
+        if not page:
+            return
+        self.current_page = page_id
+        page.lift()
+        for nav_id, (row, accent, icon, text) in self.nav_rows.items():
+            active = nav_id == page_id
+            bg = C["panel_hot"] if active else C["sidebar"]
+            row.config(bg=bg)
+            accent.config(bg=C["purple"] if active else bg)
+            icon.config(bg=bg, fg=C["purple"] if active else C["muted"])
+            text.config(bg=bg, fg=C["text"] if active else "#C1C9D8", font=("Microsoft YaHei UI", 11, "bold" if active else "normal"))
+        if page_id in {"coach", "teams"}:
+            self._style_team_cards()
 
-    def _show_help(self) -> None:
-        messagebox.showinfo("使用帮助", "选择队伍后正常操作游戏即可。程序只读取按键状态，正确输入会自动推进；错位时等待可靠锚点恢复。", parent=self.root)
+    def _select_team_from_page(self, preset_id: str) -> None:
+        self._choose_team(preset_id)
+        self._show_page("coach")
 
-    def _show_about(self) -> None:
-        messagebox.showinfo("关于", "鸣潮连招辅助 v1.1.0\n完全离线 · 不拦截 · 不模拟 · 不修改游戏", parent=self.root)
+    def _save_keys(self) -> None:
+        self.settings["keymap"] = {action: variable.get() for action, variable in self.key_vars.items()}
+        self.settings["heavy_hold_ms"] = max(180, min(1000, int(self.heavy_hold_var.get())))
+        self.settings["calibration_completed"] = True
+        self.store.save(self.settings)
+        self._restart_monitors()
+        self.key_save_status.config(text="✓ 已保存")
+        self.root.after(2200, lambda: self.key_save_status.config(text=""))
+
+    def _preview_opacity(self, _value: str = "") -> None:
+        value = float(self.opacity_var.get())
+        self.root.attributes("-alpha", value)
+        self.opacity_value.config(text=f"{value:.0%}")
+
+    def _pick_game_window(self) -> None:
+        titles = [title for title in enumerate_window_titles() if "鸣潮 · 连招教练" not in title and "鸣潮逐键教练" not in title]
+        preferred = next((title for title in titles if "鸣潮" in title or "Wuthering Waves" in title), "")
+        if preferred:
+            lines = [line.strip() for line in self.title_text.get("1.0", "end").splitlines() if line.strip()]
+            if preferred not in lines:
+                lines.insert(0, preferred)
+            self.title_text.delete("1.0", "end")
+            self.title_text.insert("1.0", "\n".join(lines))
+            self.prompt_save_status.config(text="已读取")
+        else:
+            self.prompt_save_status.config(text="未找到鸣潮窗口", fg=C["gold"])
+
+    def _save_prompts(self) -> None:
+        self.settings["only_when_game_active"] = bool(self.only_game_var.get())
+        self.settings["sound_enabled"] = bool(self.sound_var.get())
+        self.settings["opacity"] = float(self.opacity_var.get())
+        self.settings["game_titles"] = [line.strip() for line in self.title_text.get("1.0", "end").splitlines() if line.strip()]
+        self.settings["calibration_completed"] = True
+        self.store.save(self.settings)
+        self._restart_monitors()
+        self.prompt_save_status.config(text="✓ 已保存", fg=C["green"])
+        self.root.after(2200, lambda: self.prompt_save_status.config(text=""))
+
+    def _apply_vision_form(self) -> None:
+        vision = self.settings.setdefault("vision", {})
+        vision["roi"] = {name: max(0 if name in {"left", "top"} else 1, int(variable.get())) for name, variable in self.roi_vars.items()}
+        vision["match_threshold"] = max(.60, min(.98, float(self.threshold_var.get())))
+        self.settings["vision_enabled"] = bool(self.vision_enabled_var.get())
+
+    def _save_vision(self) -> None:
+        self._apply_vision_form()
+        self.store.save(self.settings)
+        self._restart_monitors()
+        self.vision_status.config(text="✓ 识别设置已保存", fg=C["green"])
+
+    def _capture_template(self) -> None:
+        try:
+            self._apply_vision_form()
+            self.store.save(self.settings)
+            monitor = self.vision_monitor or VisionMonitor(self.store.templates_dir, self.settings, lambda: "", lambda _s, _v: None)
+            character = self.template_character_var.get().strip()
+            path = monitor.capture_template(f"character:{character}")
+            self._restart_monitors()
+            self.vision_status.config(text=f"✓ 已保存：{path.name}", fg=C["green"])
+        except Exception as exc:
+            self.vision_status.config(text=f"采集失败：{exc}", fg=C["red"])
+
+    def _open_data_dir(self) -> None:
+        self.store.root.mkdir(parents=True, exist_ok=True)
+        try:
+            import os
+            os.startfile(self.store.root)  # type: ignore[attr-defined]
+            self.about_status.config(text="已打开")
+        except OSError as exc:
+            self.about_status.config(text=f"打开失败：{exc}", fg=C["red"])
+
+    def _export_combo_data(self) -> None:
+        path = self.store.export_presets([asdict(preset) for preset in self.presets])
+        self.about_status.config(text=f"已导出：{path.name}", fg=C["green"])
 
     def open_settings(self) -> None:
         self.force_visible = True
-        SettingsDialog(self)
+        self.show_overlay()
+        self._show_page("prompts")
 
     def _toggle_maximize(self) -> None:
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()

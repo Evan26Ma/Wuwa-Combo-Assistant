@@ -38,7 +38,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "roi": {"left": 0, "top": 0, "width": 320, "height": 180},
         "match_threshold": 0.86,
     },
-    "timing_overrides": {},
 }
 
 
