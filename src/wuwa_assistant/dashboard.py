@@ -312,7 +312,7 @@ class DashboardApp:
         status = tk.Frame(side, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
         status.pack(side="bottom", fill="x", padx=14, pady=14)
         _label(status, "●  运行中", size=10, color=C["green"], weight="bold", anchor="w").pack(fill="x", padx=14, pady=(14, 4))
-        _label(status, "v1.4.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
+        _label(status, "v1.4.1  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
         _label(status, "不上传任何数据", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14, pady=(2, 12))
         spark = tk.Canvas(status, height=22, bg=C["panel_alt"], highlightthickness=0)
         spark.pack(fill="x", padx=12, pady=(0, 8))
@@ -879,7 +879,7 @@ class DashboardApp:
         self._page_header(parent, "关于", "鸣潮连招辅助 · Windows 离线逐键教练")
         card = self._section(parent)
         _label(card, "鸣潮 · 连招教练", size=25, weight="bold", anchor="w").pack(fill="x", padx=28, pady=(28, 7))
-        _label(card, "v1.4.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
+        _label(card, "v1.4.1", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
         _label(card, "本程序只读取你配置的按键状态，不拦截、不模拟、不修改游戏输入。", size=11, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", padx=28, pady=(18, 20))
         _label(card, "测试阶段 · 仅供学习交流 · 完全免费 · 禁止商业售卖", size=11, color=C["gold"], weight="bold", anchor="w").pack(fill="x", padx=28, pady=(0, 14))
         for text in ("✓  完全离线运行", "✓  不保存完整按键日志", "✓  截图和识别模板仅保存在本机", "✓  启动轴完成后自动进入循环轴"):
@@ -1200,13 +1200,16 @@ class DashboardApp:
         self._resize_battle_overlay(plan.width, plan.height)
 
         if move_mode:
-            canvas.create_rectangle(4, 4, plan.width - 4, 31, fill="#171A36", outline=C["purple"], width=1)
-            canvas.create_text(
+            canvas.create_line(8, 30, plan.width - 8, 30, fill="#090B12", width=4)
+            canvas.create_line(8, 30, plan.width - 8, 30, fill=C["purple"], width=1)
+            self._canvas_text_with_halo(
+                canvas,
                 14, 17, anchor="w",
                 text=f"移动模式  ·  {self._overlay_layout_label(mode)}  ·  拖动空白区域定位",
                 fill="#E2DAFF", font=("Microsoft YaHei UI", 9, "bold"),
             )
-            canvas.create_text(
+            self._canvas_text_with_halo(
+                canvas,
                 plan.width - 14, 17, anchor="e", text=f"{view.phase}轴 · 第 {view.index + 1}/{view.total} 步",
                 fill=C["muted"], font=("Microsoft YaHei UI", 8),
             )
@@ -1217,11 +1220,15 @@ class DashboardApp:
             self._draw_combo_map_segment(canvas, segment, placement, view, overlay)
 
         if plan.hidden_before:
-            canvas.create_text(5, plan.height // 2, anchor="w", text=f"‹ {plan.hidden_before}",
-                               fill=C["muted"], font=("Segoe UI", 9, "bold"))
+            self._canvas_text_with_halo(
+                canvas, 5, plan.height // 2, anchor="w", text=f"‹ {plan.hidden_before}",
+                fill=C["muted"], font=("Segoe UI", 9, "bold"),
+            )
         if plan.hidden_after:
-            canvas.create_text(plan.width - 5, plan.height // 2, anchor="e", text=f"{plan.hidden_after} ›",
-                               fill=C["muted"], font=("Segoe UI", 9, "bold"))
+            self._canvas_text_with_halo(
+                canvas, plan.width - 5, plan.height // 2, anchor="e", text=f"{plan.hidden_after} ›",
+                fill=C["muted"], font=("Segoe UI", 9, "bold"),
+            )
 
     def _draw_combo_map_overview(self, canvas: tk.Canvas, segments, width: int, y: int) -> None:
         """Render the entire phase as a quiet node map above the local capsules."""
@@ -1229,7 +1236,8 @@ class DashboardApp:
             return
         left, right = 52, max(53, width - 52)
         current = current_segment_index(segments)
-        canvas.create_line(left, y + 8, right, y + 8, fill="#34415A", width=2)
+        canvas.create_line(left, y + 8, right, y + 8, fill="#090B12", width=5)
+        canvas.create_line(left, y + 8, right, y + 8, fill="#71809A", width=2)
         role_colors = (C["purple"], C["red"], C["blue"])
         for index, segment in enumerate(segments):
             x = left if len(segments) == 1 else left + (right - left) * index / (len(segments) - 1)
@@ -1245,11 +1253,16 @@ class DashboardApp:
                 color = "#397359"
             canvas.create_oval(x - radius, y + 8 - radius, x + radius, y + 8 + radius,
                                fill=color, outline="#FFFFFF" if index == current else "", width=2)
-        canvas.create_text(12, y + 8, anchor="w", text="启动" if segments[0].phase == "启动" else "循环",
-                           fill=C["gold"] if segments[0].phase == "启动" else C["blue"],
-                           font=("Microsoft YaHei UI", 8, "bold"))
-        canvas.create_text(width - 12, y + 8, anchor="e", text=f"段 {current + 1}/{len(segments)}",
-                           fill=C["muted"], font=("Microsoft YaHei UI", 8, "bold"))
+        self._canvas_text_with_halo(
+            canvas, 12, y + 8, anchor="w",
+            text="启动" if segments[0].phase == "启动" else "循环",
+            fill=C["gold"] if segments[0].phase == "启动" else C["blue"],
+            font=("Microsoft YaHei UI", 8, "bold"),
+        )
+        self._canvas_text_with_halo(
+            canvas, width - 12, y + 8, anchor="e", text=f"段 {current + 1}/{len(segments)}",
+            fill="#D6DCE8", font=("Microsoft YaHei UI", 8, "bold"),
+        )
 
     def _draw_combo_map_segment(self, canvas: tk.Canvas, segment, placement, view: EngineView,
                                 overlay: dict) -> None:
@@ -1258,23 +1271,29 @@ class DashboardApp:
         capsule_top = y + 8
         capsule_bottom = y + 70
         style = {
-            "error": ("#41141D", C["red"], "#FFD9DE"),
-            "current": ("#201B3A", "#F4F0FF", "#FFFFFF"),
-            "completed": ("#10231E", "#397359", "#88AA9B"),
-            "upcoming": ("#101827", "#49566C", "#E9EDF7"),
+            "error": (C["red"], "#FFD9DE"),
+            "current": ("#F4F0FF", "#FFFFFF"),
+            "completed": ("#397359", "#A8C8B9"),
+            "upcoming": ("#65738A", "#E9EDF7"),
         }
-        fill, outline, text_color = style.get(segment.state, style["upcoming"])
+        outline, text_color = style.get(segment.state, style["upcoming"])
         if segment.state == "current" and view.input_locked:
-            fill, outline, text_color = "#302512", C["gold"], "#FFF4D3"
+            outline, text_color = C["gold"], "#FFF4D3"
+        # The canvas background is color-keyed by Windows.  Keep every HUD
+        # surface unfilled so only portraits, keys, labels and status strokes
+        # remain visible over the game.
         canvas.create_polygon(
-            self._rounded_rectangle_points(capsule_left + 3, capsule_top + 4, x + width + 3, capsule_bottom + 4, 22),
-            smooth=True, splinesteps=24, fill="#000000", outline="",
+            self._rounded_rectangle_points(capsule_left, capsule_top, x + width, capsule_bottom, 22),
+            smooth=True, splinesteps=24, fill="", outline="#080A10", width=6,
         )
         canvas.create_polygon(
             self._rounded_rectangle_points(capsule_left, capsule_top, x + width, capsule_bottom, 22),
-            smooth=True, splinesteps=24, fill=fill, outline=outline, width=3 if segment.state in {"current", "error"} else 1,
+            smooth=True, splinesteps=24, fill="", outline=outline,
+            width=3 if segment.state in {"current", "error"} else 2,
         )
         accent = C["gold"] if segment.phase == "启动" else C["blue"]
+        canvas.create_line(capsule_left + 32, capsule_bottom - 3, x + width - 20, capsule_bottom - 3,
+                           fill="#080A10", width=5)
         canvas.create_line(capsule_left + 32, capsule_bottom - 3, x + width - 20, capsule_bottom - 3,
                            fill=accent, width=2)
 
@@ -1282,13 +1301,18 @@ class DashboardApp:
         portrait_size = 64
         canvas.create_oval(portrait_center_x - 35, portrait_center_y - 35,
                            portrait_center_x + 35, portrait_center_y + 35,
-                           fill="#080D19", outline=outline, width=3)
+                           fill="", outline="#080A10", width=7)
+        canvas.create_oval(portrait_center_x - 35, portrait_center_y - 35,
+                           portrait_center_x + 35, portrait_center_y + 35,
+                           fill="", outline=outline, width=3)
         portrait = self._character_photo(segment.character, portrait_size)
         if portrait:
             canvas.create_image(portrait_center_x, portrait_center_y, image=portrait, anchor="center")
         else:
-            canvas.create_text(portrait_center_x, portrait_center_y, text=segment.character[:1],
-                               fill="#FFFFFF", font=("Microsoft YaHei UI", 20, "bold"))
+            self._canvas_text_with_halo(
+                canvas, portrait_center_x, portrait_center_y, text=segment.character[:1],
+                fill="#FFFFFF", font=("Microsoft YaHei UI", 20, "bold"),
+            )
 
         action_left = x + 88
         available = max(1, width - 100)
@@ -1303,22 +1327,40 @@ class DashboardApp:
             if is_current:
                 key_outline = C["red"] if step.state == "error" else C["gold"] if view.input_locked else "#FFFFFF"
                 canvas.create_rectangle(center_x - 18, y + 18, center_x + 18, y + 56,
-                                        fill="#090D16", outline=key_outline, width=2)
+                                        fill="", outline="#080A10", width=5)
+                canvas.create_rectangle(center_x - 18, y + 18, center_x + 18, y + 56,
+                                        fill="", outline=key_outline, width=2)
             if photo:
                 canvas.create_image(center_x, y + 37, image=photo, anchor="center")
             else:
                 token = mapping["token"] if mapping else cue.display_key
-                canvas.create_text(center_x, y + 37, text=token.upper(), fill=text_color,
-                                   font=("Microsoft YaHei UI", 17, "bold"))
-            canvas.create_text(center_x + 15, y + 18, anchor="ne", text=self._overlay_key(cue),
-                               fill=C["red"] if step.state == "error" else "#D9D2F4",
-                               font=("Microsoft YaHei UI", 6, "bold"))
+                self._canvas_text_with_halo(
+                    canvas, center_x, y + 37, text=token.upper(), fill=text_color,
+                    font=("Microsoft YaHei UI", 17, "bold"),
+                )
+            self._canvas_text_with_halo(
+                canvas, center_x + 15, y + 18, anchor="ne", text=self._overlay_key(cue),
+                fill=C["red"] if step.state == "error" else "#F0EBFF",
+                font=("Microsoft YaHei UI", 6, "bold"), halo_width=1,
+            )
 
         label = segment.label
         if len(label) > 18:
             label = label[:17] + "…"
-        canvas.create_text(x + width / 2, y + height - 8, text=label, fill=text_color,
-                           font=("Microsoft YaHei UI", 10, "bold"), anchor="s")
+        self._canvas_text_with_halo(
+            canvas, x + width / 2, y + height - 8, text=label, fill=text_color,
+            font=("Microsoft YaHei UI", 10, "bold"), anchor="s",
+        )
+
+    @staticmethod
+    def _canvas_text_with_halo(canvas: tk.Canvas, x: float, y: float, *, halo_width: int = 2,
+                               halo_fill: str = "#080A10", **kwargs) -> int:
+        """Draw readable HUD text without introducing an opaque backing panel."""
+        for dx, dy in ((-halo_width, 0), (halo_width, 0), (0, -halo_width), (0, halo_width)):
+            shadow = dict(kwargs)
+            shadow["fill"] = halo_fill
+            canvas.create_text(x + dx, y + dy, **shadow)
+        return canvas.create_text(x, y, **kwargs)
 
     @staticmethod
     def _rounded_rectangle_points(x1: float, y1: float, x2: float, y2: float, radius: float) -> tuple[float, ...]:
