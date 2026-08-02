@@ -32,7 +32,7 @@
 - 上游许可证：MIT License
 - 许可证副本：[`third_party/WWCOMBO-MIT.txt`](third_party/WWCOMBO-MIT.txt)
 
-本项目悬浮连段使用的通用动作与键鼠图标取自 wwcombo 的 `public/combo-assets/button-icons`。结构化动作映射和视频按键区域识别思路亦参考其公开实现，并针对本项目的 Python/Tkinter 架构重新实现。
+本项目悬浮连段使用的通用动作与键鼠图标取自 wwcombo 的 `public/combo-assets/button-icons`。角色头像压在分段胶囊上的轴地图结构、同角色动作合并上限、结构化动作映射和视频按键区域识别思路亦参考其公开实现，并针对本项目的 Python/Tkinter 架构重新实现。
 
 本项目未导入 wwcombo 的 Live2D、主题角色图、角色底图或其他游戏美术素材。
 

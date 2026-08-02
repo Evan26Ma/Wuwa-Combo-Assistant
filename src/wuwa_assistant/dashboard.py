@@ -12,11 +12,11 @@ from PIL import Image, ImageDraw, ImageTk
 
 from .animation_guard import AnimationInputGuard
 from .combo_data import ASSET_ROOT, load_icon_mappings
+from .combo_map import build_combo_segments, current_segment_index, plan_combo_map
 from .engine import ComboEngine
 from .foreground import enumerate_window_titles, is_game_foreground
 from .input_monitor import InputMonitor, VK_CODES
 from .models import ComboPreset, Cue, EngineView, InputEvent
-from .overlay_layout import plan_overlay_layout
 from .settings import SettingsStore
 from .vision import (
     OKWW_SIGNAL_CATEGORIES,
@@ -162,7 +162,7 @@ class DashboardApp:
         self.context_menu.add_command(label="显示 / 隐藏战斗悬浮提示", command=self._toggle_battle_overlay_enabled)
         self.context_menu.add_command(label="切换悬浮窗移动模式", command=self._toggle_overlay_move_mode)
         layout_menu = tk.Menu(self.context_menu, tearoff=False, bg=C["panel_alt"], fg=C["text"])
-        for value, label in (("horizontal", "横排自动换行"), ("vertical", "竖排自动换列"), ("waterfall", "瀑布流")):
+        for value, label in (("horizontal", "横向分段地图"), ("vertical", "纵向分段地图"), ("waterfall", "瀑布分段地图")):
             layout_menu.add_command(label=label, command=lambda mode=value: self._set_overlay_layout(mode))
         self.context_menu.add_cascade(label="悬浮窗布局", menu=layout_menu)
         self.context_menu.add_command(label="设置", command=self.open_settings)
@@ -312,7 +312,7 @@ class DashboardApp:
         status = tk.Frame(side, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
         status.pack(side="bottom", fill="x", padx=14, pady=14)
         _label(status, "●  运行中", size=10, color=C["green"], weight="bold", anchor="w").pack(fill="x", padx=14, pady=(14, 4))
-        _label(status, "v1.3.1  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
+        _label(status, "v1.4.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
         _label(status, "不上传任何数据", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14, pady=(2, 12))
         spark = tk.Canvas(status, height=22, bg=C["panel_alt"], highlightthickness=0)
         spark.pack(fill="x", padx=12, pady=(0, 8))
@@ -702,7 +702,7 @@ class DashboardApp:
         self.overlay_layout_var = tk.StringVar(value=str(self.settings.get("overlay", {}).get("layout", "horizontal")))
         guard = self.settings.get("input_guard", {})
         self.input_guard_enabled_var = tk.BooleanVar(value=bool(guard.get("enabled", True)))
-        self._check(general, "显示透明战斗悬浮提示", self.overlay_enabled_var, "显示完整连段、当前角色和按键，不显示时间窗").pack(fill="x", padx=22, pady=6)
+        self._check(general, "显示透明战斗悬浮提示", self.overlay_enabled_var, "头像分段地图仅展开当前附近轴段，顶部节点显示整轴位置").pack(fill="x", padx=22, pady=6)
         self._check(general, "悬浮窗移动模式", self.overlay_move_var, "开启后可拖动；关闭后鼠标穿透，不影响游戏操作").pack(fill="x", padx=22, pady=6)
         self._check(general, "仅在鸣潮位于前台时监听", self.only_game_var, "切出游戏后自动暂停，避免把日常键盘操作当作连招").pack(fill="x", padx=22, pady=6)
         self._check(general, "每次正确推进时播放提示音", self.sound_var, "默认关闭；不会播放语音或持续音效").pack(fill="x", padx=22, pady=6)
@@ -718,7 +718,7 @@ class DashboardApp:
             values=("horizontal", "vertical", "waterfall"), state="readonly",
             width=18, style="Dark.TCombobox",
         ).pack(side="left", ipady=4, padx=(10, 12))
-        _label(layout_row, "horizontal 横排 · vertical 竖排 · waterfall 瀑布流", size=8, color=C["muted"], anchor="w").pack(side="left")
+        _label(layout_row, "horizontal 横向地图 · vertical 纵向地图 · waterfall 瀑布地图", size=8, color=C["muted"], anchor="w").pack(side="left")
         guard_row = tk.Frame(general, bg=C["panel"])
         guard_row.pack(fill="x", padx=22, pady=(10, 2))
         self.basic_lock_var = tk.IntVar(value=int(guard.get("basic_lock_ms", 110)))
@@ -879,7 +879,7 @@ class DashboardApp:
         self._page_header(parent, "关于", "鸣潮连招辅助 · Windows 离线逐键教练")
         card = self._section(parent)
         _label(card, "鸣潮 · 连招教练", size=25, weight="bold", anchor="w").pack(fill="x", padx=28, pady=(28, 7))
-        _label(card, "v1.3.1", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
+        _label(card, "v1.4.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
         _label(card, "本程序只读取你配置的按键状态，不拦截、不模拟、不修改游戏输入。", size=11, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", padx=28, pady=(18, 20))
         _label(card, "测试阶段 · 仅供学习交流 · 完全免费 · 禁止商业售卖", size=11, color=C["gold"], weight="bold", anchor="w").pack(fill="x", padx=28, pady=(0, 14))
         for text in ("✓  完全离线运行", "✓  不保存完整按键日志", "✓  截图和识别模板仅保存在本机", "✓  启动轴完成后自动进入循环轴"):
@@ -1192,9 +1192,9 @@ class DashboardApp:
         overlay = self.settings.get("overlay", {})
         move_mode = bool(overlay.get("move_mode", False))
         mode = str(overlay.get("layout", "horizontal"))
-        steps = self.engine.sequence_steps()
-        plan = plan_overlay_layout(
-            len(steps), mode, self.root.winfo_screenwidth(), self.root.winfo_screenheight(),
+        segments = build_combo_segments(self.engine.sequence_steps(), view.phase)
+        plan = plan_combo_map(
+            segments, mode, self.root.winfo_screenwidth(), self.root.winfo_screenheight(),
             move_bar_height=30 if move_mode else 0,
         )
         self._resize_battle_overlay(plan.width, plan.height)
@@ -1207,72 +1207,127 @@ class DashboardApp:
                 fill="#E2DAFF", font=("Microsoft YaHei UI", 9, "bold"),
             )
             canvas.create_text(
-                plan.width - 14, 17, anchor="e", text=f"{view.phase} {view.index + 1}/{view.total}",
+                plan.width - 14, 17, anchor="e", text=f"{view.phase}轴 · 第 {view.index + 1}/{view.total} 步",
                 fill=C["muted"], font=("Microsoft YaHei UI", 8),
             )
 
-        def draw_block(index: int) -> None:
-            step = steps[index]
-            placement = plan.blocks[index]
+        self._draw_combo_map_overview(canvas, segments, plan.width, 42 if move_mode else 12)
+        for placement in plan.placements:
+            segment = segments[placement.segment_index]
+            self._draw_combo_map_segment(canvas, segment, placement, view, overlay)
+
+        if plan.hidden_before:
+            canvas.create_text(5, plan.height // 2, anchor="w", text=f"‹ {plan.hidden_before}",
+                               fill=C["muted"], font=("Segoe UI", 9, "bold"))
+        if plan.hidden_after:
+            canvas.create_text(plan.width - 5, plan.height // 2, anchor="e", text=f"{plan.hidden_after} ›",
+                               fill=C["muted"], font=("Segoe UI", 9, "bold"))
+
+    def _draw_combo_map_overview(self, canvas: tk.Canvas, segments, width: int, y: int) -> None:
+        """Render the entire phase as a quiet node map above the local capsules."""
+        if not segments:
+            return
+        left, right = 52, max(53, width - 52)
+        current = current_segment_index(segments)
+        canvas.create_line(left, y + 8, right, y + 8, fill="#34415A", width=2)
+        role_colors = (C["purple"], C["red"], C["blue"])
+        for index, segment in enumerate(segments):
+            x = left if len(segments) == 1 else left + (right - left) * index / (len(segments) - 1)
+            try:
+                role_index = self.engine.team_order.index(segment.character)
+            except ValueError:
+                role_index = 0
+            color = role_colors[role_index % len(role_colors)]
+            radius = 5 if index == current else 3
+            if segment.state == "error":
+                color, radius = C["red"], 6
+            elif segment.state == "completed":
+                color = "#397359"
+            canvas.create_oval(x - radius, y + 8 - radius, x + radius, y + 8 + radius,
+                               fill=color, outline="#FFFFFF" if index == current else "", width=2)
+        canvas.create_text(12, y + 8, anchor="w", text="启动" if segments[0].phase == "启动" else "循环",
+                           fill=C["gold"] if segments[0].phase == "启动" else C["blue"],
+                           font=("Microsoft YaHei UI", 8, "bold"))
+        canvas.create_text(width - 12, y + 8, anchor="e", text=f"段 {current + 1}/{len(segments)}",
+                           fill=C["muted"], font=("Microsoft YaHei UI", 8, "bold"))
+
+    def _draw_combo_map_segment(self, canvas: tk.Canvas, segment, placement, view: EngineView,
+                                overlay: dict) -> None:
+        x, y, width, height = placement.x, placement.y, placement.width, placement.height
+        capsule_left = x + 34
+        capsule_top = y + 8
+        capsule_bottom = y + 70
+        style = {
+            "error": ("#41141D", C["red"], "#FFD9DE"),
+            "current": ("#201B3A", "#F4F0FF", "#FFFFFF"),
+            "completed": ("#10231E", "#397359", "#88AA9B"),
+            "upcoming": ("#101827", "#49566C", "#E9EDF7"),
+        }
+        fill, outline, text_color = style.get(segment.state, style["upcoming"])
+        if segment.state == "current" and view.input_locked:
+            fill, outline, text_color = "#302512", C["gold"], "#FFF4D3"
+        canvas.create_polygon(
+            self._rounded_rectangle_points(capsule_left + 3, capsule_top + 4, x + width + 3, capsule_bottom + 4, 22),
+            smooth=True, splinesteps=24, fill="#000000", outline="",
+        )
+        canvas.create_polygon(
+            self._rounded_rectangle_points(capsule_left, capsule_top, x + width, capsule_bottom, 22),
+            smooth=True, splinesteps=24, fill=fill, outline=outline, width=3 if segment.state in {"current", "error"} else 1,
+        )
+        accent = C["gold"] if segment.phase == "启动" else C["blue"]
+        canvas.create_line(capsule_left + 32, capsule_bottom - 3, x + width - 20, capsule_bottom - 3,
+                           fill=accent, width=2)
+
+        portrait_center_x, portrait_center_y = x + 43, y + 39
+        portrait_size = 64
+        canvas.create_oval(portrait_center_x - 35, portrait_center_y - 35,
+                           portrait_center_x + 35, portrait_center_y + 35,
+                           fill="#080D19", outline=outline, width=3)
+        portrait = self._character_photo(segment.character, portrait_size)
+        if portrait:
+            canvas.create_image(portrait_center_x, portrait_center_y, image=portrait, anchor="center")
+        else:
+            canvas.create_text(portrait_center_x, portrait_center_y, text=segment.character[:1],
+                               fill="#FFFFFF", font=("Microsoft YaHei UI", 20, "bold"))
+
+        action_left = x + 88
+        available = max(1, width - 100)
+        spacing = min(44, available / max(1, len(segment.steps)))
+        for index, step in enumerate(segment.steps):
+            center_x = action_left + spacing * index + spacing / 2
             cue = step.cue
-            state_style = {
-                "error": ("#3B111D", C["red"], 3, C["red"]),
-                "current": ("#241C45", C["purple"], 3, "#FFFFFF"),
-                "completed": ("#10251E", "#2D8D5C", 1, "#9CB6A8"),
-                "upcoming": ("#101827", C["border"], 1, C["text"]),
-            }
-            fill, outline, line_width, text_color = state_style.get(step.state, state_style["upcoming"])
-            if step.state == "current" and view.input_locked:
-                fill, outline, line_width, text_color = "#312410", C["gold"], 3, "#FFF4D3"
-            x, y, width, height = placement.x, placement.y, placement.width, placement.height
-            canvas.create_rectangle(x + 2, y + 3, x + width + 2, y + height + 3, fill="#000000", outline="")
-            canvas.create_rectangle(x, y, x + width, y + height, fill=fill, outline=outline, width=line_width)
-            phase_color = C["gold"] if step.phase == "启动" else C["blue"]
-            canvas.create_rectangle(x, y, x + 4, y + height, fill=phase_color, outline="")
-            canvas.create_text(
-                x + 9, y + 7, anchor="nw", text="启" if step.phase == "启动" else "循",
-                fill=phase_color, font=("Microsoft YaHei UI", 7, "bold"),
-            )
             action = self.engine.action_for(cue)
             mapping = self.overlay_icon_mappings.get(action) or self.overlay_icon_mappings.get(cue.action)
             photo = self.overlay_icon_photos.get(mapping["icon"]) if mapping and overlay.get("show_icons", True) else None
-            center_x = x + width // 2 + 2
+            is_current = step.state in {"current", "error"}
+            if is_current:
+                key_outline = C["red"] if step.state == "error" else C["gold"] if view.input_locked else "#FFFFFF"
+                canvas.create_rectangle(center_x - 18, y + 18, center_x + 18, y + 56,
+                                        fill="#090D16", outline=key_outline, width=2)
             if photo:
-                canvas.create_image(center_x, y + 34, image=photo, anchor="center")
+                canvas.create_image(center_x, y + 37, image=photo, anchor="center")
             else:
                 token = mapping["token"] if mapping else cue.display_key
-                canvas.create_text(
-                    center_x, y + 34, text=token.upper(), fill=text_color,
-                    font=("Microsoft YaHei UI", 20 if len(token) <= 2 else 14, "bold"),
-                )
-            physical_key = self._overlay_key(cue)
-            canvas.create_text(
-                x + width - 6, y + 7, anchor="ne", text=physical_key,
-                fill=C["red"] if step.state == "error" else "#D8D0FF",
-                font=("Microsoft YaHei UI", 7, "bold"),
-            )
-            # The slot icon and the top-right physical key already communicate
-            # that this is a switch; leave the full card width to the target name.
-            character_text = cue.character
-            canvas.create_text(
-                center_x, y + height - 9, text=character_text, fill=text_color,
-                font=("Microsoft YaHei UI", 8, "bold" if step.state in {"current", "error"} else "normal"),
-            )
-            if step.state == "error":
-                canvas.create_text(x + 8, y + height - 8, anchor="sw", text="错", fill=C["red"],
-                                   font=("Microsoft YaHei UI", 8, "bold"))
-            elif step.state == "current":
-                canvas.create_text(x + 8, y + height - 8, anchor="sw", text="锁" if view.input_locked else "▶",
-                                   fill=C["gold"] if view.input_locked else C["purple"],
-                                   font=("Segoe UI", 8, "bold"))
+                canvas.create_text(center_x, y + 37, text=token.upper(), fill=text_color,
+                                   font=("Microsoft YaHei UI", 17, "bold"))
+            canvas.create_text(center_x + 15, y + 18, anchor="ne", text=self._overlay_key(cue),
+                               fill=C["red"] if step.state == "error" else "#D9D2F4",
+                               font=("Microsoft YaHei UI", 6, "bold"))
 
-        # Waterfall blocks overlap; draw the active/error block last so feedback stays visible.
-        emphasized = {index for index, step in enumerate(steps) if step.state in {"current", "error"}}
-        for index in range(len(steps)):
-            if index not in emphasized:
-                draw_block(index)
-        for index in emphasized:
-            draw_block(index)
+        label = segment.label
+        if len(label) > 18:
+            label = label[:17] + "…"
+        canvas.create_text(x + width / 2, y + height - 8, text=label, fill=text_color,
+                           font=("Microsoft YaHei UI", 10, "bold"), anchor="s")
+
+    @staticmethod
+    def _rounded_rectangle_points(x1: float, y1: float, x2: float, y2: float, radius: float) -> tuple[float, ...]:
+        radius = max(1.0, min(radius, (x2 - x1) / 2, (y2 - y1) / 2))
+        return (
+            x1 + radius, y1, x2 - radius, y1, x2, y1, x2, y1 + radius,
+            x2, y2 - radius, x2, y2, x2 - radius, y2, x1 + radius, y2,
+            x1, y2, x1, y2 - radius, x1, y1 + radius, x1, y1,
+        )
 
     @staticmethod
     def _overlay_layout_label(mode: str) -> str:
