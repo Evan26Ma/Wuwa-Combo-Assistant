@@ -30,6 +30,8 @@ class ComboEngine:
         self._pending_slot_event: InputEvent | None = None
         self.error_cue_id = ""
         self.error_action = ""
+        self.input_locked = False
+        self.lock_reason = ""
         self._on_change = on_change
         self._lock = threading.RLock()
 
@@ -135,7 +137,20 @@ class ComboEngine:
             self._pending_slot_event = None
             self.error_cue_id = ""
             self.error_action = ""
+            self.input_locked = False
+            self.lock_reason = ""
             self._emit(now)
+
+    def set_input_lock(self, locked: bool, reason: str = "") -> None:
+        """Expose an external animation guard without changing physical input."""
+        with self._lock:
+            normalized_reason = reason if locked else ""
+            if self.input_locked == locked and self.lock_reason == normalized_reason:
+                return
+            self.input_locked = locked
+            self.lock_reason = normalized_reason
+            self.message = normalized_reason if locked else "动作结束 · 继续监听"
+            self._emit()
 
     def step(self, delta: int) -> None:
         with self._lock:
@@ -297,6 +312,8 @@ class ComboEngine:
             return "PAUSED"
         if cue is None:
             return "DONE"
+        if self.input_locked:
+            return "LOCKED"
         return "READY"
 
     def sequence_steps(self) -> tuple[SequenceStep, ...]:
@@ -352,6 +369,8 @@ class ComboEngine:
             cycle_count=self.cycle_count,
             error_cue_id=self.error_cue_id,
             error_action=self.error_action,
+            input_locked=self.input_locked,
+            lock_reason=self.lock_reason,
         )
 
     def _emit(self, now: float | None = None) -> None:

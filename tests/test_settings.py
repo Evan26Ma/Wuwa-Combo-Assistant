@@ -16,6 +16,9 @@ def test_settings_merge_defaults_and_roundtrip(tmp_path):
     assert settings["overlay"]["move_mode"] is False
     assert settings["video_recognition"]["fps"] == 30
     assert settings["video_recognition"]["bounds_percent"]["width"] == 26
+    assert settings["input_guard"]["enabled"] is True
+    assert settings["input_guard"]["basic_lock_ms"] == 110
+    assert settings["input_guard"]["liberation_fallback_ms"] == 3000
     store.save(settings)
     assert store.load() == settings
 

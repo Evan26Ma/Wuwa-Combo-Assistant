@@ -43,6 +43,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "heavy_hold_ms": 360,
     "poll_interval_ms": 8,
+    "input_guard": {
+        "enabled": True,
+        "basic_lock_ms": 110,
+        "liberation_min_ms": 900,
+        "liberation_enter_timeout_ms": 1200,
+        "liberation_fallback_ms": 3000,
+        "liberation_max_ms": 8000,
+    },
     "vision": {
         "monitor_index": 1,
         "roi": {"left": 0, "top": 0, "width": 320, "height": 180},

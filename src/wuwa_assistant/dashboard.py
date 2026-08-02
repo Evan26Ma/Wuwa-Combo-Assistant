@@ -10,6 +10,7 @@ from tkinter import filedialog, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
+from .animation_guard import AnimationInputGuard
 from .combo_data import ASSET_ROOT, load_icon_mappings
 from .engine import ComboEngine
 from .foreground import enumerate_window_titles, is_game_foreground
@@ -53,6 +54,7 @@ STATE = {
     "WAIT": ("等待按键", C["blue"]),
     "READY": ("等待按键", C["purple"]),
     "PAUSED": ("已暂停", C["dim"]),
+    "LOCKED": ("动作锁定", C["gold"]),
     "DONE": ("已完成", C["green"]),
 }
 
@@ -76,6 +78,7 @@ class DashboardApp:
         self.presets = presets
         self.events: queue.SimpleQueue[tuple[str, object]] = queue.SimpleQueue()
         self.engine = ComboEngine(self.presets, lambda view: self.events.put(("view", view)))
+        self.input_guard = AnimationInputGuard(self.settings)
         self.input_monitor: InputMonitor | None = None
         self.vision_monitor: VisionMonitor | None = None
         self.state_vision_monitor: StateVisionMonitor | None = None
@@ -309,7 +312,7 @@ class DashboardApp:
         status = tk.Frame(side, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
         status.pack(side="bottom", fill="x", padx=14, pady=14)
         _label(status, "●  运行中", size=10, color=C["green"], weight="bold", anchor="w").pack(fill="x", padx=14, pady=(14, 4))
-        _label(status, "v1.3.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
+        _label(status, "v1.3.1  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
         _label(status, "不上传任何数据", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14, pady=(2, 12))
         spark = tk.Canvas(status, height=22, bg=C["panel_alt"], highlightthickness=0)
         spark.pack(fill="x", padx=12, pady=(0, 8))
@@ -697,10 +700,16 @@ class DashboardApp:
         self.overlay_enabled_var = tk.BooleanVar(value=bool(self.settings.get("overlay", {}).get("enabled", True)))
         self.overlay_move_var = tk.BooleanVar(value=bool(self.settings.get("overlay", {}).get("move_mode", False)))
         self.overlay_layout_var = tk.StringVar(value=str(self.settings.get("overlay", {}).get("layout", "horizontal")))
-        self._check(general, "显示透明战斗悬浮提示", self.overlay_enabled_var, "仅显示当前角色和下一按键，不显示时间或复杂状态").pack(fill="x", padx=22, pady=6)
+        guard = self.settings.get("input_guard", {})
+        self.input_guard_enabled_var = tk.BooleanVar(value=bool(guard.get("enabled", True)))
+        self._check(general, "显示透明战斗悬浮提示", self.overlay_enabled_var, "显示完整连段、当前角色和按键，不显示时间窗").pack(fill="x", padx=22, pady=6)
         self._check(general, "悬浮窗移动模式", self.overlay_move_var, "开启后可拖动；关闭后鼠标穿透，不影响游戏操作").pack(fill="x", padx=22, pady=6)
         self._check(general, "仅在鸣潮位于前台时监听", self.only_game_var, "切出游戏后自动暂停，避免把日常键盘操作当作连招").pack(fill="x", padx=22, pady=6)
         self._check(general, "每次正确推进时播放提示音", self.sound_var, "默认关闭；不会播放语音或持续音效").pack(fill="x", padx=22, pady=6)
+        self._check(
+            general, "动作期间暂停连招推进", self.input_guard_enabled_var,
+            "大招优先观察队伍 HUD 消失/恢复；普攻使用短保护，重置键始终有效",
+        ).pack(fill="x", padx=22, pady=6)
         layout_row = tk.Frame(general, bg=C["panel"])
         layout_row.pack(fill="x", padx=22, pady=(12, 2))
         _label(layout_row, "连段排列", size=10, anchor="w", width=18).pack(side="left")
@@ -710,8 +719,22 @@ class DashboardApp:
             width=18, style="Dark.TCombobox",
         ).pack(side="left", ipady=4, padx=(10, 12))
         _label(layout_row, "horizontal 横排 · vertical 竖排 · waterfall 瀑布流", size=8, color=C["muted"], anchor="w").pack(side="left")
+        guard_row = tk.Frame(general, bg=C["panel"])
+        guard_row.pack(fill="x", padx=22, pady=(10, 2))
+        self.basic_lock_var = tk.IntVar(value=int(guard.get("basic_lock_ms", 110)))
+        self.liberation_fallback_var = tk.IntVar(value=int(guard.get("liberation_fallback_ms", 3000)))
+        _label(guard_row, "普攻保护", size=9, color=C["muted"]).pack(side="left")
+        tk.Spinbox(guard_row, from_=0, to=500, increment=10, textvariable=self.basic_lock_var, width=6,
+                   bg=C["panel_alt"], fg=C["text"], buttonbackground=C["panel_alt"], relief="flat",
+                   insertbackground="white").pack(side="left", padx=(8, 4), ipady=3)
+        _label(guard_row, "ms", size=8, color=C["muted"]).pack(side="left")
+        _label(guard_row, "无 HUD 识别时的大招保护", size=9, color=C["muted"]).pack(side="left", padx=(24, 0))
+        tk.Spinbox(guard_row, from_=800, to=7000, increment=100, textvariable=self.liberation_fallback_var, width=7,
+                   bg=C["panel_alt"], fg=C["text"], buttonbackground=C["panel_alt"], relief="flat",
+                   insertbackground="white").pack(side="left", padx=(8, 4), ipady=3)
+        _label(guard_row, "ms", size=8, color=C["muted"]).pack(side="left")
         alpha = tk.Frame(general, bg=C["panel"])
-        alpha.pack(fill="x", padx=22, pady=(12, 20))
+        alpha.pack(fill="x", padx=22, pady=(10, 20))
         _label(alpha, "窗口透明度", size=10, anchor="w", width=18).pack(side="left")
         self.opacity_var = tk.DoubleVar(value=float(self.settings.get("opacity", .94)))
         tk.Scale(alpha, from_=.72, to=1.0, resolution=.01, orient="horizontal", showvalue=False, variable=self.opacity_var, command=self._preview_opacity, bg=C["panel"], fg=C["text"], troughcolor=C["panel_alt"], activebackground=C["purple"], highlightthickness=0, bd=0).pack(side="left", fill="x", expand=True, padx=(10, 16))
@@ -856,7 +879,7 @@ class DashboardApp:
         self._page_header(parent, "关于", "鸣潮连招辅助 · Windows 离线逐键教练")
         card = self._section(parent)
         _label(card, "鸣潮 · 连招教练", size=25, weight="bold", anchor="w").pack(fill="x", padx=28, pady=(28, 7))
-        _label(card, "v1.3.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
+        _label(card, "v1.3.1", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
         _label(card, "本程序只读取你配置的按键状态，不拦截、不模拟、不修改游戏输入。", size=11, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", padx=28, pady=(18, 20))
         _label(card, "测试阶段 · 仅供学习交流 · 完全免费 · 禁止商业售卖", size=11, color=C["gold"], weight="bold", anchor="w").pack(fill="x", padx=28, pady=(0, 14))
         for text in ("✓  完全离线运行", "✓  不保存完整按键日志", "✓  截图和识别模板仅保存在本机", "✓  启动轴完成后自动进入循环轴"):
@@ -1016,9 +1039,21 @@ class DashboardApp:
 
     def _handle_input_event(self, event: InputEvent) -> None:
         if event.action in {"reset_primary", "reset_secondary"}:
+            if hasattr(self, "input_guard"):
+                self.input_guard.reset()
             self.events.put(("command", "reset"))
             return
+        if hasattr(self, "input_guard") and not self.input_guard.allows(event):
+            self._sync_input_guard()
+            return
         self.engine.process(event)
+        if hasattr(self, "input_guard"):
+            self.input_guard.record(event)
+            self._sync_input_guard()
+
+    def _sync_input_guard(self) -> None:
+        state = self.input_guard.state()
+        self.engine.set_input_lock(state.locked, state.reason)
 
     def _ui_loop(self) -> None:
         active = (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))
@@ -1056,7 +1091,9 @@ class DashboardApp:
                     any_match = any(active for _value, active in self.state_vision_scores.values())
                     self.okww_status.config(text=self._okww_status_text(), fg=C["green"] if any_match else C["muted"], width=16)
             elif kind == "team_vision":
-                order, _scores, matched = payload  # type: ignore[misc]
+                order, scores, matched = payload  # type: ignore[misc]
+                self.input_guard.observe_party_hud(scores)
+                self._sync_input_guard()
                 if matched and self.engine.set_team_order(order, confirmed=True):
                     self._save_team_order()
                     self._refresh_axis_page()
@@ -1079,6 +1116,8 @@ class DashboardApp:
                 elif command == "toggle_move": self._toggle_overlay_move_mode()
                 elif command.startswith("layout:"): self._set_overlay_layout(command.split(":", 1)[1])
                 elif command == "quit": self.shutdown(); return
+        self.input_guard.tick()
+        self._sync_input_guard()
         self._render(self.engine.view())
         self.root.after(80, self._ui_loop)
 
@@ -1106,10 +1145,12 @@ class DashboardApp:
             display = self._cue_display(cue)
             size = 38 if len(display) <= 2 else 29 if len(display) == 3 else 23
             self.key_label.config(text=display, fg=C["text"], font=("Microsoft YaHei UI", size, "bold"))
-            self.condition_title.config(text=cue.segment)
+            self.condition_title.config(text="动作锁定" if view.input_locked else cue.segment)
             hint = self._state_vision_hint(cue)
             suffix = f"  ·  {hint}" if hint else ""
-            self.condition_label.config(text=f"操作：{self._cue_condition(cue)}{suffix}")
+            self.condition_label.config(
+                text=view.lock_reason if view.input_locked else f"操作：{self._cue_condition(cue)}{suffix}"
+            )
             self.advice_label.config(text=f"OK-WW 建议：{cue.advice}" if cue.advice else "")
             self.segment_label.config(text=f"第 {view.index + 1} / {view.total} 步")
         self.phase_label.config(text="启动轴（仅一次）" if view.phase == "启动" else f"自动循环中  ·  第 {max(1, view.cycle_count)} 轮")
@@ -1181,6 +1222,8 @@ class DashboardApp:
                 "upcoming": ("#101827", C["border"], 1, C["text"]),
             }
             fill, outline, line_width, text_color = state_style.get(step.state, state_style["upcoming"])
+            if step.state == "current" and view.input_locked:
+                fill, outline, line_width, text_color = "#312410", C["gold"], 3, "#FFF4D3"
             x, y, width, height = placement.x, placement.y, placement.width, placement.height
             canvas.create_rectangle(x + 2, y + 3, x + width + 2, y + height + 3, fill="#000000", outline="")
             canvas.create_rectangle(x, y, x + width, y + height, fill=fill, outline=outline, width=line_width)
@@ -1219,7 +1262,8 @@ class DashboardApp:
                 canvas.create_text(x + 8, y + height - 8, anchor="sw", text="错", fill=C["red"],
                                    font=("Microsoft YaHei UI", 8, "bold"))
             elif step.state == "current":
-                canvas.create_text(x + 8, y + height - 8, anchor="sw", text="▶", fill=C["purple"],
+                canvas.create_text(x + 8, y + height - 8, anchor="sw", text="锁" if view.input_locked else "▶",
+                                   fill=C["gold"] if view.input_locked else C["purple"],
                                    font=("Segoe UI", 8, "bold"))
 
         # Waterfall blocks overlap; draw the active/error block last so feedback stays visible.
@@ -1420,6 +1464,14 @@ class DashboardApp:
         overlay["enabled"] = bool(self.overlay_enabled_var.get())
         overlay["move_mode"] = bool(self.overlay_move_var.get())
         overlay["layout"] = self.overlay_layout_var.get() if self.overlay_layout_var.get() in {"horizontal", "vertical", "waterfall"} else "horizontal"
+        guard = self.settings.setdefault("input_guard", {})
+        guard["enabled"] = bool(self.input_guard_enabled_var.get())
+        guard["basic_lock_ms"] = max(0, min(500, int(self.basic_lock_var.get())))
+        guard["liberation_fallback_ms"] = max(800, min(7000, int(self.liberation_fallback_var.get())))
+        self.input_guard.configure(self.settings)
+        if not guard["enabled"]:
+            self.input_guard.reset()
+        self._sync_input_guard()
         self.settings["opacity"] = float(self.opacity_var.get())
         self.settings["game_titles"] = [line.strip() for line in self.title_text.get("1.0", "end").splitlines() if line.strip()]
         self.settings["calibration_completed"] = True

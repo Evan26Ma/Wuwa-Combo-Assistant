@@ -23,6 +23,18 @@ def test_correct_input_advances_without_timing_judgement():
     assert engine.message == "已识别 skill"
 
 
+def test_external_animation_lock_is_visible_without_advancing_combo():
+    engine = ComboEngine((preset(cue(1, "skill")),))
+    engine.set_input_lock(True, "大招演出中")
+    view = engine.view()
+    assert view.input_locked
+    assert view.lock_reason == "大招演出中"
+    assert view.timing_state == "LOCKED"
+    assert engine.index == 0
+    engine.set_input_lock(False)
+    assert engine.view().timing_state == "READY"
+
+
 def test_wrong_input_keeps_current_step():
     engine = ComboEngine((preset(cue(1, "skill"), cue(2, "basic")),))
     engine.cue_started_at = 10.0

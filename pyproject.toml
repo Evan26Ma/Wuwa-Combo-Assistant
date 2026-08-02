@@ -1,6 +1,6 @@
 [project]
 name = "wuwa-combo-assistant"
-version = "1.3.0"
+version = "1.3.1"
 description = "鸣潮零额外按键逐键教练"
 requires-python = ">=3.11"
 dependencies = [

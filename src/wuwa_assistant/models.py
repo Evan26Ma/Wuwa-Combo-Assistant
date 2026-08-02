@@ -70,6 +70,8 @@ class EngineView:
     cycle_count: int = 0
     error_cue_id: str = ""
     error_action: str = ""
+    input_locked: bool = False
+    lock_reason: str = ""
 
 
 @dataclass(frozen=True)
