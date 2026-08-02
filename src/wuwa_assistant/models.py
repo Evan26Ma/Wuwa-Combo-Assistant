@@ -68,3 +68,13 @@ class EngineView:
     confidence: float
     active: bool
     cycle_count: int = 0
+    error_cue_id: str = ""
+    error_action: str = ""
+
+
+@dataclass(frozen=True)
+class SequenceStep:
+    cue: Cue
+    phase: str
+    phase_index: int
+    state: str

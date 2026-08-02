@@ -179,7 +179,9 @@ def _feather_cycle() -> ComboPreset:
 
 
 def load_builtin_presets() -> tuple[ComboPreset, ...]:
-    return (_card_startup(), _card_cycle(), _feather_startup(), _feather_cycle())
+    from .combo_data import load_combo_library
+
+    return load_combo_library()
 
 
 def clone_with_timing(preset: ComboPreset, timings: dict[str, dict]) -> ComboPreset:

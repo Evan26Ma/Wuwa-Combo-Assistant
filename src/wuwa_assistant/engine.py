@@ -5,7 +5,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 
-from .models import ComboPreset, Cue, EngineView, InputEvent
+from .models import ComboPreset, Cue, EngineView, InputEvent, SequenceStep
 
 
 class ComboEngine:
@@ -28,6 +28,8 @@ class ComboEngine:
         self._team_order = tuple(self.preset.team)
         self._team_order_confirmed = False
         self._pending_slot_event: InputEvent | None = None
+        self.error_cue_id = ""
+        self.error_action = ""
         self._on_change = on_change
         self._lock = threading.RLock()
 
@@ -78,6 +80,16 @@ class ComboEngine:
                 self._emit()
             return changed
 
+    def move_team_member(self, source: int, target: int) -> bool:
+        """Reorder a character slot using drag/drop insertion semantics."""
+        with self._lock:
+            if source not in range(3) or target not in range(3):
+                return False
+            order = list(self._team_order)
+            character = order.pop(source)
+            order.insert(target, character)
+            return self.set_team_order(order, confirmed=True)
+
     def action_for(self, cue: Cue) -> str:
         """Resolve a character switch cue to its current physical team slot."""
         if cue.action.startswith("slot") and cue.character in self._team_order:
@@ -121,6 +133,8 @@ class ComboEngine:
             self.confidence = 1.0
             self._history.clear()
             self._pending_slot_event = None
+            self.error_cue_id = ""
+            self.error_action = ""
             self._emit(now)
 
     def step(self, delta: int) -> None:
@@ -183,6 +197,8 @@ class ComboEngine:
             cue = self.cue
             if event.action == self.action_for(cue):
                 if cue.hold_ms and event.held_ms < cue.hold_ms:
+                    self.error_cue_id = cue.id
+                    self.error_action = event.action
                     self.message = f"长按不足：需要约 {cue.hold_ms}ms"
                     self.confidence = 0.72
                     self._emit(event.timestamp)
@@ -192,6 +208,8 @@ class ComboEngine:
 
             recovered = self._try_anchor_resync(event)
             if not recovered:
+                self.error_cue_id = cue.id
+                self.error_action = event.action
                 self.message = f"观察到 {event.action}，等待 {cue.display_key} 或下一个关键锚点"
                 self.confidence = 0.45
                 self._emit(event.timestamp)
@@ -201,6 +219,8 @@ class ComboEngine:
         if cue is None:
             return
         self.index += 1
+        self.error_cue_id = ""
+        self.error_action = ""
         self.cue_started_at = event.timestamp
         self.confidence = 1.0
         self.message = f"已识别 {cue.display_key}"
@@ -253,6 +273,8 @@ class ComboEngine:
             return False
         matched = self.preset.cues[best_idx]
         self.index = best_idx + 1
+        self.error_cue_id = ""
+        self.error_action = ""
         self.cue_started_at = event.timestamp
         self.message = f"已恢复到：{matched.character} / {matched.segment}"
         self.confidence = min(0.98, best_score / 10)
@@ -276,6 +298,31 @@ class ComboEngine:
         if cue is None:
             return "DONE"
         return "READY"
+
+    def sequence_steps(self) -> tuple[SequenceStep, ...]:
+        """Return the complete visible startup+cycle sequence with per-block state."""
+        with self._lock:
+            if self.preset.phase == "启动":
+                phases = [self.preset]
+                if self.preset.next_preset_id:
+                    phases.append(self.presets[self.preset.next_preset_id])
+            else:
+                phases = [self.preset]
+            result: list[SequenceStep] = []
+            for phase in phases:
+                for index, cue in enumerate(phase.cues):
+                    if cue.id == self.error_cue_id:
+                        state = "error"
+                    elif phase.id == self.preset.id and index == self.index:
+                        state = "current"
+                    elif phase.id == self.preset.id and index < self.index:
+                        state = "completed"
+                    elif self.preset.phase == "循环" and phase.phase == "启动":
+                        state = "completed"
+                    else:
+                        state = "upcoming"
+                    result.append(SequenceStep(cue=cue, phase=phase.phase, phase_index=index, state=state))
+            return tuple(result)
 
     def view(self, now: float | None = None) -> EngineView:
         now = now or time.perf_counter()
@@ -303,6 +350,8 @@ class ComboEngine:
             confidence=self.confidence,
             active=self.active,
             cycle_count=self.cycle_count,
+            error_cue_id=self.error_cue_id,
+            error_action=self.error_action,
         )
 
     def _emit(self, now: float | None = None) -> None:

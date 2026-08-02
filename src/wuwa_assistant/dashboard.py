@@ -6,14 +6,16 @@ import threading
 import tkinter as tk
 from dataclasses import asdict
 from pathlib import Path
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
+from .combo_data import ASSET_ROOT, load_icon_mappings
 from .engine import ComboEngine
 from .foreground import enumerate_window_titles, is_game_foreground
 from .input_monitor import InputMonitor, VK_CODES
 from .models import ComboPreset, Cue, EngineView, InputEvent
+from .overlay_layout import plan_overlay_layout
 from .settings import SettingsStore
 from .vision import (
     OKWW_SIGNAL_CATEGORIES,
@@ -25,6 +27,7 @@ from .vision import (
     import_okww_templates,
     install_bundled_state_templates,
 )
+from .video_axis import analyze_video_key_panel, export_candidate_timeline, find_ffmpeg
 
 
 C = {
@@ -84,11 +87,17 @@ class DashboardApp:
         self._tray = None
         self._drag_origin: tuple[int, int] | None = None
         self._overlay_drag_origin: tuple[int, int] | None = None
+        self._overlay_size: tuple[int, int] = (0, 0)
         self._last_rendered_index = -1
         self._last_active: bool | None = None
         self._team_cards: dict[str, tk.Frame] = {}
         self._team_chips: dict[str, tk.Frame] = {}
         self._team_page_cards: dict[str, tk.Frame] = {}
+        self._team_order_cards: list[tk.Frame] = []
+        self._team_order_name_labels: list[tk.Label] = []
+        self._team_order_portrait_labels: list[tk.Label] = []
+        self._team_order_drag_index: int | None = None
+        self._last_team_order_editor: tuple[str, ...] = ()
         self.pages: dict[str, tk.Frame] = {}
         self.nav_rows: dict[str, tuple[tk.Frame, tk.Frame, tk.Label, tk.Label]] = {}
         self.current_page = "coach"
@@ -96,6 +105,9 @@ class DashboardApp:
         self.character_asset_paths: dict[str, Path] = {}
         self.character_photos: dict[tuple[str, int], ImageTk.PhotoImage] = {}
         self._portrait_labels: list[tuple[tk.Label, str, int]] = []
+        self.video_analysis_running = False
+        self.overlay_icon_mappings = load_icon_mappings()
+        self.overlay_icon_photos: dict[str, ImageTk.PhotoImage] = {}
 
         self._auto_import_okww_portraits()
         self._install_bundled_state_templates()
@@ -145,6 +157,11 @@ class DashboardApp:
         self.context_menu.add_separator()
         self.context_menu.add_command(label="查看完整按键轴", command=self._open_full_axis_event)
         self.context_menu.add_command(label="显示 / 隐藏战斗悬浮提示", command=self._toggle_battle_overlay_enabled)
+        self.context_menu.add_command(label="切换悬浮窗移动模式", command=self._toggle_overlay_move_mode)
+        layout_menu = tk.Menu(self.context_menu, tearoff=False, bg=C["panel_alt"], fg=C["text"])
+        for value, label in (("horizontal", "横排自动换行"), ("vertical", "竖排自动换列"), ("waterfall", "瀑布流")):
+            layout_menu.add_command(label=label, command=lambda mode=value: self._set_overlay_layout(mode))
+        self.context_menu.add_cascade(label="悬浮窗布局", menu=layout_menu)
         self.context_menu.add_command(label="设置", command=self.open_settings)
         self.context_menu.add_command(label="隐藏到托盘", command=self.hide_overlay)
         self.context_menu.add_command(label="退出", command=self.shutdown)
@@ -182,18 +199,40 @@ class DashboardApp:
         self.float_canvas.bind("<B1-Motion>", self._drag_overlay)
         self.float_canvas.bind("<ButtonRelease-1>", self._end_overlay_drag)
         self.float_canvas.bind("<Button-3>", self._show_context_menu)
+        self._load_overlay_icons()
         self.battle_overlay.update_idletasks()
-        self._make_overlay_no_activate()
+        self._apply_overlay_interaction_style()
         self.battle_overlay.withdraw()
 
-    def _make_overlay_no_activate(self) -> None:
+    def _load_overlay_icons(self) -> None:
+        icon_root = ASSET_ROOT / "action_icons"
+        for entry in self.overlay_icon_mappings.values():
+            filename = entry["icon"]
+            if filename in self.overlay_icon_photos:
+                continue
+            path = icon_root / filename
+            try:
+                image = Image.open(path).convert("RGBA").resize((28, 28), Image.Resampling.LANCZOS)
+                self.overlay_icon_photos[filename] = ImageTk.PhotoImage(image)
+            except (OSError, ValueError):
+                continue
+
+    def _apply_overlay_interaction_style(self) -> None:
         try:
             import ctypes
             hwnd = self.battle_overlay.winfo_id()
             get_style = ctypes.windll.user32.GetWindowLongW
             set_style = ctypes.windll.user32.SetWindowLongW
             style = get_style(hwnd, -20)
-            set_style(hwnd, -20, style | 0x08000000 | 0x00000080)
+            style |= 0x08000000 | 0x00000080  # WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+            if self.settings.get("overlay", {}).get("move_mode", False):
+                style &= ~0x00000020  # interactive while moving
+                self.float_canvas.config(cursor="fleur")
+            else:
+                style |= 0x00000020  # WS_EX_TRANSPARENT: mouse passes to the game
+                self.float_canvas.config(cursor="arrow")
+            set_style(hwnd, -20, style)
+            ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x0037)
         except Exception:
             pass
 
@@ -249,11 +288,12 @@ class DashboardApp:
             ("keys", "⌨", "键位设置"),
             ("prompts", "◉", "提示设置"),
             ("vision", "▣", "画面识别"),
+            ("video", "▶", "视频识别"),
             ("help", "?", "使用帮助"),
             ("about", "i", "关于"),
         )
         for page_id, icon, text in nav:
-            row = tk.Frame(side, bg=C["sidebar"], height=58, cursor="hand2")
+            row = tk.Frame(side, bg=C["sidebar"], height=50, cursor="hand2")
             row.pack(fill="x", pady=(10 if text == "选择教练" else 0, 0))
             row.pack_propagate(False)
             accent = tk.Frame(row, bg=C["sidebar"], width=4)
@@ -269,7 +309,7 @@ class DashboardApp:
         status = tk.Frame(side, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
         status.pack(side="bottom", fill="x", padx=14, pady=14)
         _label(status, "●  运行中", size=10, color=C["green"], weight="bold", anchor="w").pack(fill="x", padx=14, pady=(14, 4))
-        _label(status, "v1.2.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
+        _label(status, "v1.3.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
         _label(status, "不上传任何数据", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14, pady=(2, 12))
         spark = tk.Canvas(status, height=22, bg=C["panel_alt"], highlightthickness=0)
         spark.pack(fill="x", padx=12, pady=(0, 8))
@@ -283,6 +323,7 @@ class DashboardApp:
             ("keys", self._build_keys_page),
             ("prompts", self._build_prompts_page),
             ("vision", self._build_vision_page),
+            ("video", self._build_video_page),
             ("help", self._build_help_page),
             ("about", self._build_about_page),
         )
@@ -552,6 +593,32 @@ class DashboardApp:
             highlightbackground=C["border"],
         )
         self.team_order_label.pack(fill="x", pady=(0, 12))
+        editor = tk.Frame(parent, bg=C["panel"], highlightthickness=1, highlightbackground=C["border"])
+        editor.pack(fill="x", pady=(0, 12))
+        editor_head = tk.Frame(editor, bg=C["panel"])
+        editor_head.pack(fill="x", padx=16, pady=(12, 8))
+        _label(editor_head, "拖动调整实际角色顺序", size=11, weight="bold", anchor="w").pack(side="left")
+        _label(editor_head, "切人步骤按角色目标保存，不与固定数字位绑定", size=8, color=C["muted"], anchor="e").pack(side="right")
+        order_strip = tk.Frame(editor, bg=C["panel"])
+        order_strip.pack(fill="x", padx=16, pady=(0, 14))
+        for index in range(3):
+            card = tk.Frame(
+                order_strip, bg=C["panel_alt"], cursor="fleur",
+                highlightthickness=1, highlightbackground=C["border"], height=62,
+            )
+            card.pack(side="left", fill="x", expand=True, padx=(0, 8 if index < 2 else 0))
+            card.pack_propagate(False)
+            _label(card, f"{index + 1}", size=13, color=C["purple"], weight="bold", width=3).pack(side="left", padx=(8, 2))
+            portrait = tk.Label(card, bg=C["panel_alt"], fg=C["text"], bd=0, width=4, height=2)
+            portrait.pack(side="left", padx=(0, 9), pady=9)
+            name = _label(card, "—", size=11, weight="bold", anchor="w", bg=C["panel_alt"])
+            name.pack(side="left", fill="x", expand=True)
+            _label(card, "⋮⋮", size=11, color=C["dim"], bg=C["panel_alt"]).pack(side="right", padx=9)
+            self._team_order_cards.append(card)
+            self._team_order_portrait_labels.append(portrait)
+            self._team_order_name_labels.append(name)
+            self._bind_tree(card, "<ButtonPress-1>", lambda _event, slot=index: self._start_team_order_drag(slot))
+            self._bind_tree(card, "<ButtonRelease-1>", self._finish_team_order_drag)
         grid = tk.Frame(parent, bg=C["bg"])
         grid.pack(fill="both", expand=True)
         startups = [preset for preset in self.presets if preset.phase == "启动"]
@@ -577,6 +644,7 @@ class DashboardApp:
             choose = self._button(card, "使用这套连招", lambda pid=preset.id: self._select_team_from_page(pid), primary=True)
             choose.pack(anchor="w", padx=26, pady=(0, 28))
             self._bind_tree(card, "<Button-1>", lambda _e, pid=preset.id: self._select_team_from_page(pid))
+        self._refresh_team_order_editor(force=True)
 
     def _build_keys_page(self, parent: tk.Frame) -> None:
         self._page_header(parent, "键位设置", "录入你的游戏键位；程序只读取状态，不会拦截或发送按键")
@@ -627,9 +695,21 @@ class DashboardApp:
         self.only_game_var = tk.BooleanVar(value=bool(self.settings.get("only_when_game_active", True)))
         self.sound_var = tk.BooleanVar(value=bool(self.settings.get("sound_enabled", False)))
         self.overlay_enabled_var = tk.BooleanVar(value=bool(self.settings.get("overlay", {}).get("enabled", True)))
+        self.overlay_move_var = tk.BooleanVar(value=bool(self.settings.get("overlay", {}).get("move_mode", False)))
+        self.overlay_layout_var = tk.StringVar(value=str(self.settings.get("overlay", {}).get("layout", "horizontal")))
         self._check(general, "显示透明战斗悬浮提示", self.overlay_enabled_var, "仅显示当前角色和下一按键，不显示时间或复杂状态").pack(fill="x", padx=22, pady=6)
+        self._check(general, "悬浮窗移动模式", self.overlay_move_var, "开启后可拖动；关闭后鼠标穿透，不影响游戏操作").pack(fill="x", padx=22, pady=6)
         self._check(general, "仅在鸣潮位于前台时监听", self.only_game_var, "切出游戏后自动暂停，避免把日常键盘操作当作连招").pack(fill="x", padx=22, pady=6)
         self._check(general, "每次正确推进时播放提示音", self.sound_var, "默认关闭；不会播放语音或持续音效").pack(fill="x", padx=22, pady=6)
+        layout_row = tk.Frame(general, bg=C["panel"])
+        layout_row.pack(fill="x", padx=22, pady=(12, 2))
+        _label(layout_row, "连段排列", size=10, anchor="w", width=18).pack(side="left")
+        ttk.Combobox(
+            layout_row, textvariable=self.overlay_layout_var,
+            values=("horizontal", "vertical", "waterfall"), state="readonly",
+            width=18, style="Dark.TCombobox",
+        ).pack(side="left", ipady=4, padx=(10, 12))
+        _label(layout_row, "horizontal 横排 · vertical 竖排 · waterfall 瀑布流", size=8, color=C["muted"], anchor="w").pack(side="left")
         alpha = tk.Frame(general, bg=C["panel"])
         alpha.pack(fill="x", padx=22, pady=(12, 20))
         _label(alpha, "窗口透明度", size=10, anchor="w", width=18).pack(side="left")
@@ -716,11 +796,67 @@ class DashboardApp:
             _label(text, title, size=11, weight="bold", anchor="w").pack(fill="x")
             _label(text, body, size=9, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", pady=(5, 0))
 
+    def _build_video_page(self, parent: tk.Frame) -> None:
+        self._page_header(parent, "视频按键识别", "从教学视频的按键显示区域提取候选时间轴；结果必须人工复核")
+        source = self._section(parent)
+        _label(source, "视频与 FFmpeg", size=13, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(18, 8))
+        config = self.settings.get("video_recognition", {})
+        self.video_path_var = tk.StringVar(value=str(config.get("video_path", "")))
+        self.ffmpeg_path_var = tk.StringVar(value=str(config.get("ffmpeg_path", "")))
+        for label, variable, command in (
+            ("教学视频", self.video_path_var, self._pick_video_file),
+            ("FFmpeg", self.ffmpeg_path_var, None),
+        ):
+            row = tk.Frame(source, bg=C["panel"])
+            row.pack(fill="x", padx=22, pady=5)
+            _label(row, label, size=9, color=C["muted"], anchor="w", width=12).pack(side="left")
+            tk.Entry(
+                row, textvariable=variable, bg=C["panel_alt"], fg=C["text"], insertbackground="white",
+                relief="flat", highlightthickness=1, highlightbackground=C["border"], font=("Segoe UI", 9),
+            ).pack(side="left", fill="x", expand=True, ipady=7)
+            if command:
+                self._button(row, "选择视频", command).pack(side="left", padx=(10, 0))
+        _label(
+            source,
+            "识别 wwcombo 标准按键面板的青色高亮；其他作者的按键皮肤需先校准热点，当前输出只作为候选轴。",
+            size=8, color=C["gold"], anchor="w", wraplength=900, justify="left",
+        ).pack(fill="x", padx=22, pady=(8, 16))
+
+        region = self._section(parent)
+        _label(region, "按键区域与轴分段", size=13, weight="bold", anchor="w").pack(fill="x", padx=22, pady=(16, 4))
+        _label(region, "区域使用视频宽高百分比；循环开始为 0 时全部写入启动轴。", size=8, color=C["muted"], anchor="w").pack(fill="x", padx=22, pady=(0, 10))
+        bounds = config.get("bounds_percent", {})
+        self.video_bounds_vars = {
+            name: tk.DoubleVar(value=float(bounds.get(name, default)))
+            for name, default in (("x", 0), ("y", 0), ("width", 26), ("height", 22))
+        }
+        fields = tk.Frame(region, bg=C["panel"])
+        fields.pack(fill="x", padx=22)
+        for column, (name, label) in enumerate((("x", "左 X%"), ("y", "上 Y%"), ("width", "宽 W%"), ("height", "高 H%"))):
+            cell = tk.Frame(fields, bg=C["panel"])
+            cell.grid(row=0, column=column, sticky="ew", padx=(0, 10))
+            fields.grid_columnconfigure(column, weight=1)
+            _label(cell, label, size=8, color=C["muted"], anchor="w").pack(fill="x")
+            tk.Entry(cell, textvariable=self.video_bounds_vars[name], bg=C["panel_alt"], fg=C["text"], insertbackground="white", relief="flat", highlightthickness=1, highlightbackground=C["border"], justify="center").pack(fill="x", ipady=6, pady=(4, 0))
+        extra = tk.Frame(fields, bg=C["panel"])
+        extra.grid(row=0, column=4, sticky="ew")
+        fields.grid_columnconfigure(4, weight=1)
+        _label(extra, "循环开始 ms", size=8, color=C["muted"], anchor="w").pack(fill="x")
+        self.video_cycle_start_var = tk.IntVar(value=int(config.get("cycle_start_ms", 0)))
+        tk.Entry(extra, textvariable=self.video_cycle_start_var, bg=C["panel_alt"], fg=C["text"], insertbackground="white", relief="flat", highlightthickness=1, highlightbackground=C["border"], justify="center").pack(fill="x", ipady=6, pady=(4, 0))
+        actions = tk.Frame(region, bg=C["panel"])
+        actions.pack(fill="x", padx=22, pady=(16, 18))
+        self.video_analyze_button = self._button(actions, "开始辅助识别", self._start_video_analysis, primary=True)
+        self.video_analyze_button.pack(side="left")
+        self._button(actions, "打开结果目录", self._open_video_analysis_dir).pack(side="left", padx=10)
+        self.video_analysis_status = _label(actions, "等待选择视频", size=9, color=C["muted"], anchor="w")
+        self.video_analysis_status.pack(side="left", fill="x", expand=True, padx=10)
+
     def _build_about_page(self, parent: tk.Frame) -> None:
         self._page_header(parent, "关于", "鸣潮连招辅助 · Windows 离线逐键教练")
         card = self._section(parent)
         _label(card, "鸣潮 · 连招教练", size=25, weight="bold", anchor="w").pack(fill="x", padx=28, pady=(28, 7))
-        _label(card, "v1.2.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
+        _label(card, "v1.3.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
         _label(card, "本程序只读取你配置的按键状态，不拦截、不模拟、不修改游戏输入。", size=11, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", padx=28, pady=(18, 20))
         _label(card, "测试阶段 · 仅供学习交流 · 完全免费 · 禁止商业售卖", size=11, color=C["gold"], weight="bold", anchor="w").pack(fill="x", padx=28, pady=(0, 14))
         for text in ("✓  完全离线运行", "✓  不保存完整按键日志", "✓  截图和识别模板仅保存在本机", "✓  启动轴完成后自动进入循环轴"):
@@ -765,6 +901,7 @@ class DashboardApp:
         order = self.settings.get("team_orders", {}).get(signature)
         if isinstance(order, list):
             self.engine.set_team_order(order, confirmed=False)
+        self._refresh_team_order_editor(force=True)
 
     def _save_team_order(self) -> None:
         signature = self._team_signature(self.engine.preset.team)
@@ -923,6 +1060,15 @@ class DashboardApp:
                 if matched and self.engine.set_team_order(order, confirmed=True):
                     self._save_team_order()
                     self._refresh_axis_page()
+            elif kind == "video_analysis":
+                status, message = payload  # type: ignore[misc]
+                if hasattr(self, "video_analysis_status"):
+                    color = C["green"] if status == "done" else C["red"] if status == "error" else C["gold"]
+                    self.video_analysis_status.config(text=str(message), fg=color)
+                if status in {"done", "error"}:
+                    self.video_analysis_running = False
+                    if hasattr(self, "video_analyze_button"):
+                        self.video_analyze_button.config(state="normal", text="开始辅助识别")
             elif kind == "command":
                 command = str(payload)
                 if command == "show": self.show_overlay()
@@ -930,6 +1076,8 @@ class DashboardApp:
                 elif command == "reset": self.engine.reset()
                 elif command == "open_axis": self._open_full_axis_event()
                 elif command == "toggle_float": self._toggle_battle_overlay_enabled()
+                elif command == "toggle_move": self._toggle_overlay_move_mode()
+                elif command.startswith("layout:"): self._set_overlay_layout(command.split(":", 1)[1])
                 elif command == "quit": self.shutdown(); return
         self._render(self.engine.view())
         self.root.after(80, self._ui_loop)
@@ -943,6 +1091,7 @@ class DashboardApp:
                 pass
         self._last_rendered_index = view.index
         self._style_team_cards()
+        self._refresh_team_order_editor()
         cue = view.cue
         state_text, state_color = STATE.get(view.timing_state, (view.timing_state, C["muted"]))
         self.state_label.config(text=f"●  {state_text}", fg=state_color)
@@ -999,53 +1148,105 @@ class DashboardApp:
     def _draw_battle_overlay(self, view: EngineView) -> None:
         canvas = self.float_canvas
         canvas.delete("all")
-        cues = self.engine.cue_window(6)
-        cue = cues[0] if cues else None
-        character = cue.character if cue else "完成"
-        key = self._overlay_key(cue) if cue else "✓"
-        key_size = 38 if len(key) <= 3 else 28 if len(key) <= 7 else 22
+        overlay = self.settings.get("overlay", {})
+        move_mode = bool(overlay.get("move_mode", False))
+        mode = str(overlay.get("layout", "horizontal"))
+        steps = self.engine.sequence_steps()
+        plan = plan_overlay_layout(
+            len(steps), mode, self.root.winfo_screenwidth(), self.root.winfo_screenheight(),
+            move_bar_height=30 if move_mode else 0,
+        )
+        self._resize_battle_overlay(plan.width, plan.height)
 
-        def shadow_text(x: int, y: int, text: str, *, font, anchor: str = "w", fill: str = C["text"]) -> None:
-            canvas.create_text(x + 2, y + 2, text=text, anchor=anchor, fill="#000000", font=font)
-            canvas.create_text(x, y, text=text, anchor=anchor, fill=fill, font=font)
+        if move_mode:
+            canvas.create_rectangle(4, 4, plan.width - 4, 31, fill="#171A36", outline=C["purple"], width=1)
+            canvas.create_text(
+                14, 17, anchor="w",
+                text=f"移动模式  ·  {self._overlay_layout_label(mode)}  ·  拖动空白区域定位",
+                fill="#E2DAFF", font=("Microsoft YaHei UI", 9, "bold"),
+            )
+            canvas.create_text(
+                plan.width - 14, 17, anchor="e", text=f"{view.phase} {view.index + 1}/{view.total}",
+                fill=C["muted"], font=("Microsoft YaHei UI", 8),
+            )
 
-        canvas.create_line(10, 12, 10, 122, fill=C["purple"], width=4)
-        shadow_text(25, 18, character, font=("Microsoft YaHei UI", 12, "bold"), fill="#D8D0FF")
-        canvas.create_text(117, 19, text=f"{view.phase} · {view.index + 1}/{view.total}", anchor="w",
-                           fill=C["muted"], font=("Microsoft YaHei UI", 8))
-
-        canvas.create_rectangle(24, 43, 108, 113, fill=C["panel_hot"], outline=C["purple"], width=3)
-        canvas.create_text(66, 51, text="当前", anchor="n", fill="#CDBFFF",
-                           font=("Microsoft YaHei UI", 8, "bold"))
-        shadow_text(66, 84, key, anchor="center", font=("Microsoft YaHei UI", key_size, "bold"))
-
-        upcoming = list(cues[1:6])
-        for index in range(5):
-            left = 132 + index * 88
-            center = left + 34
-            canvas.create_line(left - 16, 79, left - 5, 79, fill=C["border_hot"] if index == 0 else C["border"], width=2)
-            canvas.create_polygon(left - 7, 75, left - 1, 79, left - 7, 83,
-                                  fill=C["border_hot"] if index == 0 else C["border"], outline="")
-            canvas.create_rectangle(left, 51, left + 68, 105, fill=C["panel_alt"], outline=C["border"], width=2)
-            if index < len(upcoming):
-                item = upcoming[index]
-                item_key = self._overlay_key(item)
-                item_size = 22 if len(item_key) <= 3 else 17 if len(item_key) <= 6 else 14
-                canvas.create_text(center, 76, text=item_key, fill=C["text"],
-                                   font=("Microsoft YaHei UI", item_size, "bold"))
-                canvas.create_text(center, 116, text=item.character, fill=C["muted"],
-                                   font=("Microsoft YaHei UI", 7))
+        def draw_block(index: int) -> None:
+            step = steps[index]
+            placement = plan.blocks[index]
+            cue = step.cue
+            state_style = {
+                "error": ("#3B111D", C["red"], 3, C["red"]),
+                "current": ("#241C45", C["purple"], 3, "#FFFFFF"),
+                "completed": ("#10251E", "#2D8D5C", 1, "#9CB6A8"),
+                "upcoming": ("#101827", C["border"], 1, C["text"]),
+            }
+            fill, outline, line_width, text_color = state_style.get(step.state, state_style["upcoming"])
+            x, y, width, height = placement.x, placement.y, placement.width, placement.height
+            canvas.create_rectangle(x + 2, y + 3, x + width + 2, y + height + 3, fill="#000000", outline="")
+            canvas.create_rectangle(x, y, x + width, y + height, fill=fill, outline=outline, width=line_width)
+            phase_color = C["gold"] if step.phase == "启动" else C["blue"]
+            canvas.create_rectangle(x, y, x + 4, y + height, fill=phase_color, outline="")
+            canvas.create_text(
+                x + 9, y + 7, anchor="nw", text="启" if step.phase == "启动" else "循",
+                fill=phase_color, font=("Microsoft YaHei UI", 7, "bold"),
+            )
+            action = self.engine.action_for(cue)
+            mapping = self.overlay_icon_mappings.get(action) or self.overlay_icon_mappings.get(cue.action)
+            photo = self.overlay_icon_photos.get(mapping["icon"]) if mapping and overlay.get("show_icons", True) else None
+            center_x = x + width // 2 + 2
+            if photo:
+                canvas.create_image(center_x, y + 34, image=photo, anchor="center")
             else:
-                canvas.create_text(center, 78, text="—", fill=C["dim"],
-                                   font=("Microsoft YaHei UI", 17, "bold"))
+                token = mapping["token"] if mapping else cue.display_key
+                canvas.create_text(
+                    center_x, y + 34, text=token.upper(), fill=text_color,
+                    font=("Microsoft YaHei UI", 20 if len(token) <= 2 else 14, "bold"),
+                )
+            physical_key = self._overlay_key(cue)
+            canvas.create_text(
+                x + width - 6, y + 7, anchor="ne", text=physical_key,
+                fill=C["red"] if step.state == "error" else "#D8D0FF",
+                font=("Microsoft YaHei UI", 7, "bold"),
+            )
+            # The slot icon and the top-right physical key already communicate
+            # that this is a switch; leave the full card width to the target name.
+            character_text = cue.character
+            canvas.create_text(
+                center_x, y + height - 9, text=character_text, fill=text_color,
+                font=("Microsoft YaHei UI", 8, "bold" if step.state in {"current", "error"} else "normal"),
+            )
+            if step.state == "error":
+                canvas.create_text(x + 8, y + height - 8, anchor="sw", text="错", fill=C["red"],
+                                   font=("Microsoft YaHei UI", 8, "bold"))
+            elif step.state == "current":
+                canvas.create_text(x + 8, y + height - 8, anchor="sw", text="▶", fill=C["purple"],
+                                   font=("Segoe UI", 8, "bold"))
 
-        canvas.create_rectangle(558, 5, 644, 36, fill=C["panel_alt"], outline=C["border_hot"], width=1,
-                                tags=("axis_button",))
-        canvas.create_text(601, 20, text="完整轴", fill=C["text"], font=("Microsoft YaHei UI", 9, "bold"),
-                           tags=("axis_button",))
-        canvas.tag_bind("axis_button", "<ButtonRelease-1>", self._open_full_axis_event)
-        canvas.tag_bind("axis_button", "<Enter>", lambda _event: canvas.config(cursor="hand2"))
-        canvas.tag_bind("axis_button", "<Leave>", lambda _event: canvas.config(cursor="fleur"))
+        # Waterfall blocks overlap; draw the active/error block last so feedback stays visible.
+        emphasized = {index for index, step in enumerate(steps) if step.state in {"current", "error"}}
+        for index in range(len(steps)):
+            if index not in emphasized:
+                draw_block(index)
+        for index in emphasized:
+            draw_block(index)
+
+    @staticmethod
+    def _overlay_layout_label(mode: str) -> str:
+        return {"horizontal": "横排", "vertical": "竖排", "waterfall": "瀑布流"}.get(mode, "横排")
+
+    def _resize_battle_overlay(self, width: int, height: int) -> None:
+        size = (max(220, int(width)), max(90, int(height)))
+        if size == self._overlay_size:
+            return
+        self._overlay_size = size
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        current_x = self.battle_overlay.winfo_x()
+        current_y = self.battle_overlay.winfo_y()
+        x = min(max(0, current_x), max(0, screen_width - size[0]))
+        y = min(max(0, current_y), max(0, screen_height - size[1]))
+        self.float_canvas.config(width=size[0], height=size[1])
+        self.battle_overlay.geometry(f"{size[0]}x{size[1]}+{x}+{y}")
 
     def _overlay_key(self, cue: Cue) -> str:
         if cue.action == "basic":
@@ -1074,6 +1275,45 @@ class DashboardApp:
         for preset_id, card in self._team_page_cards.items():
             active = preset_id == selected
             card.config(highlightbackground=C["border_hot"] if active else C["border"], highlightthickness=2 if active else 1)
+
+    def _start_team_order_drag(self, index: int) -> None:
+        self._team_order_drag_index = index
+        for card_index, card in enumerate(self._team_order_cards):
+            card.config(highlightbackground=C["purple"] if card_index == index else C["border"])
+
+    def _finish_team_order_drag(self, event: tk.Event) -> str:
+        source = self._team_order_drag_index
+        self._team_order_drag_index = None
+        if source is None or not self._team_order_cards:
+            return "break"
+        centers = [card.winfo_rootx() + card.winfo_width() / 2 for card in self._team_order_cards]
+        target = min(range(len(centers)), key=lambda index: abs(event.x_root - centers[index]))
+        self.engine.move_team_member(source, target)
+        self._save_team_order()
+        self._refresh_axis_page()
+        self._refresh_team_order_editor(force=True)
+        return "break"
+
+    def _refresh_team_order_editor(self, *, force: bool = False) -> None:
+        if not self._team_order_cards:
+            return
+        order = tuple(self.engine.team_order)
+        if not force and order == self._last_team_order_editor:
+            return
+        self._last_team_order_editor = order
+        for index, character in enumerate(order):
+            card = self._team_order_cards[index]
+            card.config(highlightbackground=C["border"])
+            self._team_order_name_labels[index].config(text=character)
+            portrait = self._team_order_portrait_labels[index]
+            photo = self._character_photo(character, 42)
+            portrait.config(
+                image=photo or "", text="" if photo else character[:1],
+                font=("Microsoft YaHei UI", 13, "bold"),
+                highlightthickness=0 if photo else 1,
+                highlightbackground=C["border_hot"],
+            )
+            portrait.image = photo
 
     def _draw_action_rule(self, _event=None) -> None:
         c = self.action_rule
@@ -1176,11 +1416,16 @@ class DashboardApp:
     def _save_prompts(self) -> None:
         self.settings["only_when_game_active"] = bool(self.only_game_var.get())
         self.settings["sound_enabled"] = bool(self.sound_var.get())
-        self.settings.setdefault("overlay", {})["enabled"] = bool(self.overlay_enabled_var.get())
+        overlay = self.settings.setdefault("overlay", {})
+        overlay["enabled"] = bool(self.overlay_enabled_var.get())
+        overlay["move_mode"] = bool(self.overlay_move_var.get())
+        overlay["layout"] = self.overlay_layout_var.get() if self.overlay_layout_var.get() in {"horizontal", "vertical", "waterfall"} else "horizontal"
         self.settings["opacity"] = float(self.opacity_var.get())
         self.settings["game_titles"] = [line.strip() for line in self.title_text.get("1.0", "end").splitlines() if line.strip()]
         self.settings["calibration_completed"] = True
         self.store.save(self.settings)
+        self._apply_overlay_interaction_style()
+        self._draw_battle_overlay(self.engine.view())
         self._restart_monitors()
         self.prompt_save_status.config(text="✓ 已保存", fg=C["green"])
         self.root.after(2200, lambda: self.prompt_save_status.config(text=""))
@@ -1199,6 +1444,68 @@ class DashboardApp:
         self.store.save(self.settings)
         self._restart_monitors()
         self.vision_status.config(text="✓ 识别设置已保存", fg=C["green"])
+
+    def _pick_video_file(self) -> None:
+        path = filedialog.askopenfilename(
+            parent=self.root, title="选择教学视频",
+            filetypes=(("视频文件", "*.mp4 *.mov *.mkv *.webm *.avi *.m4v"), ("所有文件", "*.*")),
+        )
+        if path:
+            self.video_path_var.set(path)
+            self.video_analysis_status.config(text=Path(path).name, fg=C["muted"])
+
+    def _start_video_analysis(self) -> None:
+        if self.video_analysis_running:
+            return
+        video_path = Path(self.video_path_var.get().strip())
+        if not video_path.is_file():
+            self.video_analysis_status.config(text="视频文件不存在", fg=C["red"])
+            return
+        ffmpeg = find_ffmpeg(self.ffmpeg_path_var.get().strip())
+        if not ffmpeg:
+            self.video_analysis_status.config(text="未找到 ffmpeg.exe", fg=C["red"])
+            return
+        bounds = {name: float(variable.get()) for name, variable in self.video_bounds_vars.items()}
+        cycle_start_ms = max(0, int(self.video_cycle_start_var.get()))
+        config = self.settings.setdefault("video_recognition", {})
+        config.update({
+            "video_path": str(video_path), "ffmpeg_path": str(ffmpeg), "fps": 30,
+            "cycle_start_ms": cycle_start_ms, "bounds_percent": bounds,
+        })
+        self.store.save(self.settings)
+        self.video_analysis_running = True
+        self.video_analyze_button.config(state="disabled", text="正在识别…")
+        self.video_analysis_status.config(text="正在读取视频帧…", fg=C["gold"])
+        threading.Thread(
+            target=self._run_video_analysis,
+            args=(video_path, ffmpeg, bounds, cycle_start_ms),
+            name="video-key-recognition", daemon=True,
+        ).start()
+
+    def _run_video_analysis(self, video_path: Path, ffmpeg: Path, bounds: dict[str, float], cycle_start_ms: int) -> None:
+        try:
+            events = analyze_video_key_panel(
+                video_path, ffmpeg, bounds, fps=30,
+                on_progress=lambda frames: self.events.put(("video_analysis", ("progress", f"已分析 {frames} 帧"))),
+            )
+            safe_name = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff_-]+", "-", video_path.stem).strip("-") or "video"
+            output = self.store.root / "video-analysis" / f"{safe_name}.candidate.json"
+            export_candidate_timeline(
+                output, video_path, events, self.engine.team_order, self.overlay_icon_mappings,
+                cycle_start_ms=cycle_start_ms,
+            )
+            self.events.put(("video_analysis", ("done", f"识别 {len(events)} 个候选动作 · {output.name}")))
+        except Exception as exc:
+            self.events.put(("video_analysis", ("error", f"识别失败：{exc}")))
+
+    def _open_video_analysis_dir(self) -> None:
+        path = self.store.root / "video-analysis"
+        path.mkdir(parents=True, exist_ok=True)
+        try:
+            import os
+            os.startfile(path)  # type: ignore[attr-defined]
+        except OSError as exc:
+            self.video_analysis_status.config(text=f"打开失败：{exc}", fg=C["red"])
 
     def _capture_template(self) -> None:
         try:
@@ -1363,6 +1670,8 @@ class DashboardApp:
         self._drag_origin = None
 
     def _start_overlay_drag(self, event: tk.Event) -> None:
+        if not self.settings.get("overlay", {}).get("move_mode", False):
+            return
         self._overlay_drag_origin = (
             event.x_root - self.battle_overlay.winfo_x(),
             event.y_root - self.battle_overlay.winfo_y(),
@@ -1398,6 +1707,24 @@ class DashboardApp:
             self.battle_overlay.withdraw()
         self.store.save(self.settings)
 
+    def _set_overlay_layout(self, mode: str) -> None:
+        if mode not in {"horizontal", "vertical", "waterfall"}:
+            return
+        self.settings.setdefault("overlay", {})["layout"] = mode
+        if hasattr(self, "overlay_layout_var"):
+            self.overlay_layout_var.set(mode)
+        self.store.save(self.settings)
+        self._draw_battle_overlay(self.engine.view())
+
+    def _toggle_overlay_move_mode(self) -> None:
+        overlay = self.settings.setdefault("overlay", {})
+        overlay["move_mode"] = not bool(overlay.get("move_mode", False))
+        if hasattr(self, "overlay_move_var"):
+            self.overlay_move_var.set(overlay["move_mode"])
+        self.store.save(self.settings)
+        self._apply_overlay_interaction_style()
+        self._draw_battle_overlay(self.engine.view())
+
     def hide_overlay(self) -> None:
         self.root.withdraw()
 
@@ -1419,6 +1746,10 @@ class DashboardApp:
                 pystray.MenuItem("设置", lambda: self.events.put(("command", "settings"))),
                 pystray.MenuItem("查看完整按键轴", lambda: self.events.put(("command", "open_axis"))),
                 pystray.MenuItem("显示 / 隐藏战斗悬浮提示", lambda: self.events.put(("command", "toggle_float"))),
+                pystray.MenuItem("切换悬浮窗移动模式", lambda: self.events.put(("command", "toggle_move"))),
+                pystray.MenuItem("横排布局", lambda: self.events.put(("command", "layout:horizontal"))),
+                pystray.MenuItem("竖排布局", lambda: self.events.put(("command", "layout:vertical"))),
+                pystray.MenuItem("瀑布流布局", lambda: self.events.put(("command", "layout:waterfall"))),
                 pystray.MenuItem("从启动轴重新开始", lambda: self.events.put(("command", "reset"))),
                 pystray.MenuItem("退出", lambda: self.events.put(("command", "quit"))),
             )

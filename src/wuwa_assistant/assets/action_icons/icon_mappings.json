@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "mappings": {
+    "basic": {"token": "a", "icon": "mouse-left.png", "label": "普攻"},
+    "heavy": {"token": "z", "icon": "mouse-left-hold.png", "label": "重击"},
+    "skill": {"token": "e", "icon": "skill.png", "label": "共鸣技能"},
+    "echo": {"token": "q", "icon": "echo.png", "label": "声骸"},
+    "liberation": {"token": "r", "icon": "liberation.png", "label": "共鸣解放"},
+    "jump": {"token": "j", "icon": "jump.png", "label": "跳跃"},
+    "dodge": {"token": "d", "icon": "mouse-right.png", "label": "闪避"},
+    "utility": {"token": "f", "icon": "tool.png", "label": "辅助键"},
+    "forward": {"token": "w", "icon": "forward.png", "label": "前进"},
+    "slot1": {"token": "i", "icon": "i.png", "label": "切换角色 1"},
+    "slot2": {"token": "ii", "icon": "ii.png", "label": "切换角色 2"},
+    "slot3": {"token": "iii", "icon": "iii.png", "label": "切换角色 3"}
+  }
+}

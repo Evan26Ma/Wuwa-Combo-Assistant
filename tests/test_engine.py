@@ -29,6 +29,15 @@ def test_wrong_input_keeps_current_step():
     engine.process(InputEvent("echo", 10.2))
     assert engine.index == 0
     assert engine.confidence < 0.5
+    assert engine.view().error_cue_id == "c1"
+
+
+def test_correct_input_clears_previous_error_marker():
+    engine = ComboEngine((preset(cue(1, "skill"), cue(2, "basic")),))
+    engine.process(InputEvent("echo", engine.cue_started_at + 0.1))
+    engine.process(InputEvent("skill", engine.cue_started_at + 0.2))
+    assert engine.index == 1
+    assert engine.view().error_cue_id == ""
 
 
 def test_short_hold_does_not_advance_heavy():
@@ -121,6 +130,14 @@ def test_switch_cue_uses_detected_team_order():
     assert engine.index == 1
 
 
+def test_drag_reorder_keeps_switch_target_character_adaptive():
+    combo = preset(cue(1, "slot1", character="甲"), cue(2, "basic", character="甲"))
+    engine = ComboEngine((combo,))
+    assert engine.move_team_member(0, 2)
+    assert engine.team_order == ("乙", "丙", "甲")
+    assert engine.action_for(engine.cue) == "slot3"
+
+
 def test_character_vision_learns_pressed_slot_and_recovers_switch():
     combo = preset(cue(1, "slot1", character="甲"), cue(2, "basic", character="甲"))
     engine = ComboEngine((combo,))
@@ -146,3 +163,19 @@ def test_six_step_window_crosses_startup_and_wraps_cycle():
     assert [item.action for item in engine.cue_window(6)] == [
         "skill", "echo", "basic", "liberation", "basic", "liberation",
     ]
+
+
+def test_complete_sequence_includes_startup_and_one_cycle():
+    startup = ComboPreset(
+        "team-startup", "队伍 · 启动轴", ("甲", "乙", "丙"), "启动", 1000,
+        "", "", (cue(1, "skill"), cue(2, "echo")), next_preset_id="team-cycle",
+    )
+    cycle = ComboPreset(
+        "team-cycle", "队伍 · 循环轴", ("甲", "乙", "丙"), "循环", 1000,
+        "", "", (cue(3, "basic"), cue(4, "liberation")), loops=True,
+    )
+    engine = ComboEngine((startup, cycle))
+    steps = engine.sequence_steps()
+    assert [step.phase for step in steps] == ["启动", "启动", "循环", "循环"]
+    assert steps[0].state == "current"
+    assert len(steps) == 4

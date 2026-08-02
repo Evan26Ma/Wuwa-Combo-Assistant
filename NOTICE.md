@@ -25,6 +25,17 @@
 
 视频版权归原作者及相应权利人所有。本项目仅保存整理后的按键步骤和来源链接，不重新分发视频内容。
 
+## WW Combo Trainer / wwcombo
+
+- 上游项目：<https://github.com/NovaWallace/wwcombo>
+- 上游作者：NovaWallace
+- 上游许可证：MIT License
+- 许可证副本：[`third_party/WWCOMBO-MIT.txt`](third_party/WWCOMBO-MIT.txt)
+
+本项目悬浮连段使用的通用动作与键鼠图标取自 wwcombo 的 `public/combo-assets/button-icons`。结构化动作映射和视频按键区域识别思路亦参考其公开实现，并针对本项目的 Python/Tkinter 架构重新实现。
+
+本项目未导入 wwcombo 的 Live2D、主题角色图、角色底图或其他游戏美术素材。
+
 ## 非官方声明
 
 《鸣潮》、游戏角色、图标及相关素材的权利归其各自权利人所有。本项目与库洛游戏、OK-WW 或教学视频作者不存在隶属、赞助或官方合作关系。

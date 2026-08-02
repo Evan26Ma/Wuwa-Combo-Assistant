@@ -17,7 +17,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "sound_enabled": False,
     "vision_enabled": True,
     "team_orders": {},
-    "overlay": {"enabled": True, "x": None, "y": 72},
+    "overlay": {
+        "enabled": True,
+        "x": None,
+        "y": 72,
+        "layout": "horizontal",
+        "move_mode": False,
+        "show_icons": True,
+    },
     "keymap": {
         "basic": "MOUSE_LEFT",
         "heavy": "MOUSE_LEFT",
@@ -45,6 +52,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "enabled": False,
         "okww_path": "F:\\Tools\\okww",
         "signals": {},
+    },
+    "video_recognition": {
+        "ffmpeg_path": "F:\\GAM3\\wwcombo 正式版 0.6 便携版\\wwcombo 正式版 0.6 便携版\\ffmpeg.exe",
+        "video_path": "",
+        "fps": 30,
+        "cycle_start_ms": 0,
+        "bounds_percent": {"x": 0.0, "y": 0.0, "width": 26.0, "height": 22.0},
     },
 }
 
