@@ -27,6 +27,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "show_icons": True,
         "toggle_hotkey_enabled": True,
     },
+    "manual_listening": {
+        "enabled": True,
+    },
     "keymap": {
         "basic": "MOUSE_LEFT",
         "heavy": "MOUSE_LEFT",
@@ -43,6 +46,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "reset_primary": "ESC",
         "reset_secondary": "F8",
         "toggle_overlay": "F7",
+        "listening_start": "F",
+        "listening_stop": "ESC",
     },
     "heavy_hold_ms": 360,
     "poll_interval_ms": 8,

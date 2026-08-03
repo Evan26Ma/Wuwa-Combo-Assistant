@@ -14,10 +14,13 @@ def test_settings_merge_defaults_and_roundtrip(tmp_path):
     assert settings["keymap"]["reset_primary"] == "ESC"
     assert settings["keymap"]["reset_secondary"] == "F8"
     assert settings["keymap"]["toggle_overlay"] == "F7"
+    assert settings["keymap"]["listening_start"] == "F"
+    assert settings["keymap"]["listening_stop"] == "ESC"
     assert settings["overlay"]["layout"] == "horizontal"
     assert settings["overlay"]["move_mode"] is False
     assert settings["overlay"]["scale"] == 1.0
     assert settings["overlay"]["toggle_hotkey_enabled"] is True
+    assert settings["manual_listening"]["enabled"] is True
     assert settings["video_recognition"]["fps"] == 30
     assert settings["video_recognition"]["bounds_percent"]["width"] == 26
     assert settings["input_guard"]["enabled"] is True

@@ -73,3 +73,25 @@ def test_overlay_toggle_hotkey_emits_on_key_press():
     states[VK_CODES["F7"]] = False
     monitor.poll_once(now=1.3)
     assert [event.action for event in events] == ["toggle_overlay"]
+
+
+def test_manual_session_keys_are_observed_with_existing_game_bindings():
+    states = {VK_CODES["F"]: False, VK_CODES["ESC"]: False}
+    events = []
+    monitor = InputMonitor(
+        {
+            "utility": "F", "reset_primary": "ESC",
+            "listening_start": "F", "listening_stop": "ESC",
+        },
+        events.append, state_reader=lambda vk: states[vk],
+    )
+    monitor.poll_once(now=1.0)
+    states[VK_CODES["F"]] = True
+    monitor.poll_once(now=1.1)
+    states[VK_CODES["F"]] = False
+    monitor.poll_once(now=1.2)
+    states[VK_CODES["ESC"]] = True
+    monitor.poll_once(now=1.3)
+    assert [event.action for event in events] == [
+        "utility", "listening_start", "reset_primary", "listening_stop",
+    ]

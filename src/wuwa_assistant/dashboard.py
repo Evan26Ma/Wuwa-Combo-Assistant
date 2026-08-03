@@ -92,6 +92,9 @@ class DashboardApp:
         self._overlay_drag_origin: tuple[int, int] | None = None
         self._overlay_size: tuple[int, int] = (0, 0)
         self.overlay_temporarily_hidden = False
+        self.listening_session_active = not bool(
+            self.settings.get("manual_listening", {}).get("enabled", True)
+        )
         self._last_rendered_index = -1
         self._last_active: bool | None = None
         self._team_cards: dict[str, tk.Frame] = {}
@@ -333,7 +336,7 @@ class DashboardApp:
         status = tk.Frame(side, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
         status.pack(side="bottom", fill="x", padx=14, pady=14)
         _label(status, "●  运行中", size=10, color=C["green"], weight="bold", anchor="w").pack(fill="x", padx=14, pady=(14, 4))
-        _label(status, "v1.5.1  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
+        _label(status, "v1.6.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
         _label(status, "不上传任何数据", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14, pady=(2, 12))
         spark = tk.Canvas(status, height=22, bg=C["panel_alt"], highlightthickness=0)
         spark.pack(fill="x", padx=12, pady=(0, 8))
@@ -687,6 +690,8 @@ class DashboardApp:
             ("reset_primary", "重置连招（主键）"),
             ("reset_secondary", "重置连招（备用）"),
             ("toggle_overlay", "临时隐藏 / 恢复悬浮窗"),
+            ("listening_start", "开始监听"),
+            ("listening_stop", "结束监听"),
         )
         self.key_vars: dict[str, tk.StringVar] = {}
         choices = sorted(VK_CODES, key=lambda value: (len(value), value))
@@ -728,6 +733,9 @@ class DashboardApp:
         self.overlay_hotkey_enabled_var = tk.BooleanVar(
             value=bool(self.settings.get("overlay", {}).get("toggle_hotkey_enabled", True)),
         )
+        self.manual_listening_var = tk.BooleanVar(
+            value=bool(self.settings.get("manual_listening", {}).get("enabled", True)),
+        )
         guard = self.settings.get("input_guard", {})
         self.input_guard_enabled_var = tk.BooleanVar(value=bool(guard.get("enabled", True)))
         self._check(general, "显示透明战斗悬浮提示", self.overlay_enabled_var, "头像分段地图仅展开当前附近轴段，顶部节点显示整轴位置").pack(fill="x", padx=22, pady=6)
@@ -735,6 +743,10 @@ class DashboardApp:
         self._check(
             general, "启用临时隐藏快捷键", self.overlay_hotkey_enabled_var,
             "默认 F7：按一次隐藏，再按一次恢复；不暂停连招进度",
+        ).pack(fill="x", padx=22, pady=6)
+        self._check(
+            general, "启用手动监听会话", self.manual_listening_var,
+            "默认 F 开始监听，ESC 结束并重置；未开始时不推进连招",
         ).pack(fill="x", padx=22, pady=6)
         self._check(general, "仅在鸣潮位于前台时监听", self.only_game_var, "切出游戏后自动暂停，避免把日常键盘操作当作连招").pack(fill="x", padx=22, pady=6)
         self._check(general, "每次正确推进时播放提示音", self.sound_var, "默认关闭；不会播放语音或持续音效").pack(fill="x", padx=22, pady=6)
@@ -924,7 +936,7 @@ class DashboardApp:
         self._page_header(parent, "关于", "鸣潮连招辅助 · Windows 离线逐键教练")
         card = self._section(parent)
         _label(card, "鸣潮 · 连招教练", size=25, weight="bold", anchor="w").pack(fill="x", padx=28, pady=(28, 7))
-        _label(card, "v1.5.1", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
+        _label(card, "v1.6.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
         _label(card, "本程序只读取你配置的按键状态，不拦截、不模拟、不修改游戏输入。", size=11, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", padx=28, pady=(18, 20))
         _label(card, "测试阶段 · 仅供学习交流 · 完全免费 · 禁止商业售卖", size=11, color=C["gold"], weight="bold", anchor="w").pack(fill="x", padx=28, pady=(0, 14))
         for text in ("✓  完全离线运行", "✓  不保存完整按键日志", "✓  截图和识别模板仅保存在本机", "✓  启动轴完成后自动进入循环轴"):
@@ -1054,6 +1066,9 @@ class DashboardApp:
         monitored_keymap = dict(self.settings["keymap"])
         if not self.settings.get("overlay", {}).get("toggle_hotkey_enabled", True):
             monitored_keymap.pop("toggle_overlay", None)
+        if not self.settings.get("manual_listening", {}).get("enabled", True):
+            monitored_keymap.pop("listening_start", None)
+            monitored_keymap.pop("listening_stop", None)
         self.input_monitor = InputMonitor(
             monitored_keymap, self._handle_input_event,
             heavy_hold_ms=int(self.settings.get("heavy_hold_ms", 360)),
@@ -1086,8 +1101,25 @@ class DashboardApp:
             self.team_vision_monitor.start()
 
     def _handle_input_event(self, event: InputEvent) -> None:
+        settings = getattr(self, "settings", {})
+        manual_listening = bool(settings.get("manual_listening", {}).get("enabled", True))
+        if event.action == "listening_start":
+            if manual_listening and not getattr(self, "listening_session_active", False):
+                self.listening_session_active = True
+                self.overlay_temporarily_hidden = False
+                if hasattr(self, "engine"):
+                    self.engine.set_active(True)
+                self.events.put(("command", "session_started"))
+            return
+        if event.action == "listening_stop":
+            if manual_listening and getattr(self, "listening_session_active", False):
+                self.listening_session_active = False
+                if hasattr(self, "engine"):
+                    self.engine.set_active(False)
+                self.events.put(("command", "session_stopped"))
+            return
         if event.action == "toggle_overlay":
-            overlay = self.settings.get("overlay", {})
+            overlay = settings.get("overlay", {})
             if overlay.get("toggle_hotkey_enabled", True) and overlay.get("enabled", True):
                 self.events.put(("command", "toggle_overlay_temp"))
             return
@@ -1095,6 +1127,8 @@ class DashboardApp:
             if hasattr(self, "input_guard"):
                 self.input_guard.reset()
             self.events.put(("command", "reset"))
+            return
+        if manual_listening and not getattr(self, "listening_session_active", True):
             return
         if hasattr(self, "input_guard") and not self.input_guard.allows(event):
             self._sync_input_guard()
@@ -1109,7 +1143,12 @@ class DashboardApp:
         self.engine.set_input_lock(state.locked, state.reason)
 
     def _ui_loop(self) -> None:
-        active = (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))
+        foreground_active = (
+            not self.settings.get("only_when_game_active", True)
+            or is_game_foreground(self.settings.get("game_titles", []))
+        )
+        manual_listening = bool(self.settings.get("manual_listening", {}).get("enabled", True))
+        active = foreground_active and (self.listening_session_active or not manual_listening)
         self.engine.set_active(active)
         self._last_active = active
         overlay_enabled = bool(self.settings.get("overlay", {}).get("enabled", True))
@@ -1120,9 +1159,16 @@ class DashboardApp:
         elif self.battle_overlay.state() != "withdrawn":
             self.battle_overlay.withdraw()
         unrestricted = not self.settings.get("only_when_game_active", True)
+        start_key = str(self.settings.get("keymap", {}).get("listening_start", "F"))
         self.foreground_pill.config(
-            text="●  全局监听已启用" if unrestricted else "●  鸣潮已在前台" if active else "●  等待鸣潮前台",
-            fg=C["green"] if active else C["muted"],
+            text=(
+                f"●  等待 {start_key} 开始监听"
+                if manual_listening and foreground_active and not self.listening_session_active
+                else "●  全局监听已启用" if unrestricted and active
+                else "●  鸣潮已在前台" if active
+                else "●  等待鸣潮前台"
+            ),
+            fg=C["green"] if active else C["gold"] if foreground_active else C["muted"],
         )
         while True:
             try:
@@ -1167,6 +1213,14 @@ class DashboardApp:
                 elif command == "open_axis": self._open_full_axis_event()
                 elif command == "toggle_float": self._toggle_battle_overlay_enabled()
                 elif command == "toggle_overlay_temp": self._toggle_battle_overlay_temporary()
+                elif command == "session_started":
+                    if hasattr(self, "input_guard"):
+                        self.input_guard.reset()
+                elif command == "session_stopped":
+                    if hasattr(self, "input_guard"):
+                        self.input_guard.reset()
+                    self.engine.reset()
+                    self.battle_overlay.withdraw()
                 elif command == "toggle_move": self._toggle_overlay_move_mode()
                 elif command.startswith("layout:"): self._set_overlay_layout(command.split(":", 1)[1])
                 elif command == "quit": self.shutdown(); return
@@ -1635,6 +1689,13 @@ class DashboardApp:
         overlay["toggle_hotkey_enabled"] = bool(self.overlay_hotkey_enabled_var.get())
         if not overlay["toggle_hotkey_enabled"]:
             self.overlay_temporarily_hidden = False
+        manual = self.settings.setdefault("manual_listening", {})
+        was_manual = bool(manual.get("enabled", True))
+        manual["enabled"] = bool(self.manual_listening_var.get())
+        if manual["enabled"] and not was_manual:
+            self.listening_session_active = False
+        elif not manual["enabled"]:
+            self.listening_session_active = True
         guard = self.settings.setdefault("input_guard", {})
         guard["enabled"] = bool(self.input_guard_enabled_var.get())
         guard["basic_lock_ms"] = max(0, min(500, int(self.basic_lock_var.get())))
