@@ -57,3 +57,19 @@ def test_both_reset_keys_are_observed_independently():
     states[VK_CODES["F8"]] = True
     monitor.poll_once(now=1.3)
     assert [event.action for event in events] == ["reset_primary", "reset_secondary"]
+
+
+def test_overlay_toggle_hotkey_emits_on_key_press():
+    states = {VK_CODES["F7"]: False}
+    events = []
+    monitor = InputMonitor(
+        {"toggle_overlay": "F7"}, events.append,
+        state_reader=lambda vk: states[vk],
+    )
+    monitor.poll_once(now=1.0)
+    states[VK_CODES["F7"]] = True
+    monitor.poll_once(now=1.1)
+    monitor.poll_once(now=1.2)
+    states[VK_CODES["F7"]] = False
+    monitor.poll_once(now=1.3)
+    assert [event.action for event in events] == ["toggle_overlay"]

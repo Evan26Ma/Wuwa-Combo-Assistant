@@ -91,6 +91,7 @@ class DashboardApp:
         self._drag_origin: tuple[int, int] | None = None
         self._overlay_drag_origin: tuple[int, int] | None = None
         self._overlay_size: tuple[int, int] = (0, 0)
+        self.overlay_temporarily_hidden = False
         self._last_rendered_index = -1
         self._last_active: bool | None = None
         self._team_cards: dict[str, tk.Frame] = {}
@@ -161,6 +162,7 @@ class DashboardApp:
         self.context_menu.add_separator()
         self.context_menu.add_command(label="查看完整按键轴", command=self._open_full_axis_event)
         self.context_menu.add_command(label="显示 / 隐藏战斗悬浮提示", command=self._toggle_battle_overlay_enabled)
+        self.context_menu.add_command(label="临时隐藏 / 恢复悬浮窗", command=self._toggle_battle_overlay_temporary)
         self.context_menu.add_command(label="切换悬浮窗移动模式", command=self._toggle_overlay_move_mode)
         layout_menu = tk.Menu(self.context_menu, tearoff=False, bg=C["panel_alt"], fg=C["text"])
         for value, label in (("horizontal", "横向分段地图"), ("vertical", "纵向分段地图"), ("waterfall", "瀑布分段地图")):
@@ -331,7 +333,7 @@ class DashboardApp:
         status = tk.Frame(side, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
         status.pack(side="bottom", fill="x", padx=14, pady=14)
         _label(status, "●  运行中", size=10, color=C["green"], weight="bold", anchor="w").pack(fill="x", padx=14, pady=(14, 4))
-        _label(status, "v1.5.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
+        _label(status, "v1.5.1  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
         _label(status, "不上传任何数据", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14, pady=(2, 12))
         spark = tk.Canvas(status, height=22, bg=C["panel_alt"], highlightthickness=0)
         spark.pack(fill="x", padx=12, pady=(0, 8))
@@ -684,6 +686,7 @@ class DashboardApp:
             ("slot2", "队伍槽位 2"), ("slot3", "队伍槽位 3"),
             ("reset_primary", "重置连招（主键）"),
             ("reset_secondary", "重置连招（备用）"),
+            ("toggle_overlay", "临时隐藏 / 恢复悬浮窗"),
         )
         self.key_vars: dict[str, tk.StringVar] = {}
         choices = sorted(VK_CODES, key=lambda value: (len(value), value))
@@ -722,10 +725,17 @@ class DashboardApp:
         self.overlay_scale_var = tk.DoubleVar(
             value=self._overlay_scale_value(self.settings.get("overlay", {}).get("scale", 1.0)),
         )
+        self.overlay_hotkey_enabled_var = tk.BooleanVar(
+            value=bool(self.settings.get("overlay", {}).get("toggle_hotkey_enabled", True)),
+        )
         guard = self.settings.get("input_guard", {})
         self.input_guard_enabled_var = tk.BooleanVar(value=bool(guard.get("enabled", True)))
         self._check(general, "显示透明战斗悬浮提示", self.overlay_enabled_var, "头像分段地图仅展开当前附近轴段，顶部节点显示整轴位置").pack(fill="x", padx=22, pady=6)
         self._check(general, "悬浮窗移动模式", self.overlay_move_var, "开启后可拖动；关闭后鼠标穿透，不影响游戏操作").pack(fill="x", padx=22, pady=6)
+        self._check(
+            general, "启用临时隐藏快捷键", self.overlay_hotkey_enabled_var,
+            "默认 F7：按一次隐藏，再按一次恢复；不暂停连招进度",
+        ).pack(fill="x", padx=22, pady=6)
         self._check(general, "仅在鸣潮位于前台时监听", self.only_game_var, "切出游戏后自动暂停，避免把日常键盘操作当作连招").pack(fill="x", padx=22, pady=6)
         self._check(general, "每次正确推进时播放提示音", self.sound_var, "默认关闭；不会播放语音或持续音效").pack(fill="x", padx=22, pady=6)
         self._check(
@@ -914,7 +924,7 @@ class DashboardApp:
         self._page_header(parent, "关于", "鸣潮连招辅助 · Windows 离线逐键教练")
         card = self._section(parent)
         _label(card, "鸣潮 · 连招教练", size=25, weight="bold", anchor="w").pack(fill="x", padx=28, pady=(28, 7))
-        _label(card, "v1.5.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
+        _label(card, "v1.5.1", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
         _label(card, "本程序只读取你配置的按键状态，不拦截、不模拟、不修改游戏输入。", size=11, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", padx=28, pady=(18, 20))
         _label(card, "测试阶段 · 仅供学习交流 · 完全免费 · 禁止商业售卖", size=11, color=C["gold"], weight="bold", anchor="w").pack(fill="x", padx=28, pady=(0, 14))
         for text in ("✓  完全离线运行", "✓  不保存完整按键日志", "✓  截图和识别模板仅保存在本机", "✓  启动轴完成后自动进入循环轴"):
@@ -1041,8 +1051,11 @@ class DashboardApp:
         if self.team_vision_monitor:
             self.team_vision_monitor.stop()
         enabled = lambda: (not self.settings.get("only_when_game_active", True)) or is_game_foreground(self.settings.get("game_titles", []))
+        monitored_keymap = dict(self.settings["keymap"])
+        if not self.settings.get("overlay", {}).get("toggle_hotkey_enabled", True):
+            monitored_keymap.pop("toggle_overlay", None)
         self.input_monitor = InputMonitor(
-            self.settings["keymap"], self._handle_input_event,
+            monitored_keymap, self._handle_input_event,
             heavy_hold_ms=int(self.settings.get("heavy_hold_ms", 360)),
             poll_interval_ms=int(self.settings.get("poll_interval_ms", 8)), enabled=enabled,
         )
@@ -1073,6 +1086,11 @@ class DashboardApp:
             self.team_vision_monitor.start()
 
     def _handle_input_event(self, event: InputEvent) -> None:
+        if event.action == "toggle_overlay":
+            overlay = self.settings.get("overlay", {})
+            if overlay.get("toggle_hotkey_enabled", True) and overlay.get("enabled", True):
+                self.events.put(("command", "toggle_overlay_temp"))
+            return
         if event.action in {"reset_primary", "reset_secondary"}:
             if hasattr(self, "input_guard"):
                 self.input_guard.reset()
@@ -1095,7 +1113,7 @@ class DashboardApp:
         self.engine.set_active(active)
         self._last_active = active
         overlay_enabled = bool(self.settings.get("overlay", {}).get("enabled", True))
-        if active and overlay_enabled:
+        if active and overlay_enabled and not self.overlay_temporarily_hidden:
             if self.battle_overlay.state() == "withdrawn":
                 self.battle_overlay.deiconify()
                 self.battle_overlay.attributes("-topmost", True)
@@ -1148,6 +1166,7 @@ class DashboardApp:
                 elif command == "reset": self.engine.reset()
                 elif command == "open_axis": self._open_full_axis_event()
                 elif command == "toggle_float": self._toggle_battle_overlay_enabled()
+                elif command == "toggle_overlay_temp": self._toggle_battle_overlay_temporary()
                 elif command == "toggle_move": self._toggle_overlay_move_mode()
                 elif command.startswith("layout:"): self._set_overlay_layout(command.split(":", 1)[1])
                 elif command == "quit": self.shutdown(); return
@@ -1613,6 +1632,9 @@ class DashboardApp:
         overlay["move_mode"] = bool(self.overlay_move_var.get())
         overlay["layout"] = self.overlay_layout_var.get() if self.overlay_layout_var.get() in {"horizontal", "vertical", "waterfall"} else "horizontal"
         overlay["scale"] = self._overlay_scale_value(self.overlay_scale_var.get())
+        overlay["toggle_hotkey_enabled"] = bool(self.overlay_hotkey_enabled_var.get())
+        if not overlay["toggle_hotkey_enabled"]:
+            self.overlay_temporarily_hidden = False
         guard = self.settings.setdefault("input_guard", {})
         guard["enabled"] = bool(self.input_guard_enabled_var.get())
         guard["basic_lock_ms"] = max(0, min(500, int(self.basic_lock_var.get())))
@@ -1906,7 +1928,25 @@ class DashboardApp:
             self.overlay_enabled_var.set(overlay["enabled"])
         if not overlay["enabled"]:
             self.battle_overlay.withdraw()
+        else:
+            self.overlay_temporarily_hidden = False
         self.store.save(self.settings)
+
+    def _toggle_battle_overlay_temporary(self) -> None:
+        overlay = self.settings.get("overlay", {})
+        if not overlay.get("enabled", True):
+            return
+        self.overlay_temporarily_hidden = not self.overlay_temporarily_hidden
+        if self.overlay_temporarily_hidden:
+            self.battle_overlay.withdraw()
+        else:
+            active = (
+                not self.settings.get("only_when_game_active", True)
+                or is_game_foreground(self.settings.get("game_titles", []))
+            )
+            if active:
+                self.battle_overlay.deiconify()
+                self.battle_overlay.attributes("-topmost", True)
 
     def _set_overlay_layout(self, mode: str) -> None:
         if mode not in {"horizontal", "vertical", "waterfall"}:
@@ -1947,6 +1987,7 @@ class DashboardApp:
                 pystray.MenuItem("设置", lambda: self.events.put(("command", "settings"))),
                 pystray.MenuItem("查看完整按键轴", lambda: self.events.put(("command", "open_axis"))),
                 pystray.MenuItem("显示 / 隐藏战斗悬浮提示", lambda: self.events.put(("command", "toggle_float"))),
+                pystray.MenuItem("临时隐藏 / 恢复悬浮窗", lambda: self.events.put(("command", "toggle_overlay_temp"))),
                 pystray.MenuItem("切换悬浮窗移动模式", lambda: self.events.put(("command", "toggle_move"))),
                 pystray.MenuItem("横排布局", lambda: self.events.put(("command", "layout:horizontal"))),
                 pystray.MenuItem("竖排布局", lambda: self.events.put(("command", "layout:vertical"))),

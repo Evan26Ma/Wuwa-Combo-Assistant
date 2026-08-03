@@ -25,6 +25,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "layout": "horizontal",
         "move_mode": False,
         "show_icons": True,
+        "toggle_hotkey_enabled": True,
     },
     "keymap": {
         "basic": "MOUSE_LEFT",
@@ -41,6 +42,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "slot3": "3",
         "reset_primary": "ESC",
         "reset_secondary": "F8",
+        "toggle_overlay": "F7",
     },
     "heavy_hold_ms": 360,
     "poll_interval_ms": 8,
