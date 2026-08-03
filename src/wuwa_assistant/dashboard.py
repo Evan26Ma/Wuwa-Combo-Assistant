@@ -110,7 +110,8 @@ class DashboardApp:
         self._portrait_labels: list[tuple[tk.Label, str, int]] = []
         self.video_analysis_running = False
         self.overlay_icon_mappings = load_icon_mappings()
-        self.overlay_icon_photos: dict[str, ImageTk.PhotoImage] = {}
+        self.overlay_icon_photos: dict[tuple[str, int], ImageTk.PhotoImage] = {}
+        self._overlay_draw_scale = 1.0
 
         self._auto_import_okww_portraits()
         self._install_bundled_state_templates()
@@ -208,17 +209,35 @@ class DashboardApp:
         self.battle_overlay.withdraw()
 
     def _load_overlay_icons(self) -> None:
-        icon_root = ASSET_ROOT / "action_icons"
         for entry in self.overlay_icon_mappings.values():
-            filename = entry["icon"]
-            if filename in self.overlay_icon_photos:
-                continue
-            path = icon_root / filename
-            try:
-                image = Image.open(path).convert("RGBA").resize((28, 28), Image.Resampling.LANCZOS)
-                self.overlay_icon_photos[filename] = ImageTk.PhotoImage(image)
-            except (OSError, ValueError):
-                continue
+            self._overlay_icon_photo(entry["icon"], 28)
+
+    def _overlay_icon_photo(self, filename: str, size: int) -> ImageTk.PhotoImage | None:
+        size = max(12, int(size))
+        key = (filename, size)
+        if key in self.overlay_icon_photos:
+            return self.overlay_icon_photos[key]
+        path = ASSET_ROOT / "action_icons" / filename
+        try:
+            image = Image.open(path).convert("RGBA").resize((size, size), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(image)
+        except (OSError, ValueError):
+            return None
+        self.overlay_icon_photos[key] = photo
+        return photo
+
+    def _hud_font(self, family: str, size: int, weight: str = "normal") -> tuple[str, int, str]:
+        return family, max(5, round(size * self._overlay_draw_scale)), weight
+
+    def _hud_width(self, width: int) -> int:
+        return max(1, round(width * self._overlay_draw_scale))
+
+    @staticmethod
+    def _overlay_scale_value(value: object) -> float:
+        try:
+            return max(.65, min(1.5, float(value)))
+        except (TypeError, ValueError):
+            return 1.0
 
     def _apply_overlay_interaction_style(self) -> None:
         try:
@@ -312,7 +331,7 @@ class DashboardApp:
         status = tk.Frame(side, bg=C["panel_alt"], highlightthickness=1, highlightbackground=C["border"])
         status.pack(side="bottom", fill="x", padx=14, pady=14)
         _label(status, "●  运行中", size=10, color=C["green"], weight="bold", anchor="w").pack(fill="x", padx=14, pady=(14, 4))
-        _label(status, "v1.4.1  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
+        _label(status, "v1.5.0  |  完全离线", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14)
         _label(status, "不上传任何数据", size=9, color=C["muted"], anchor="w").pack(fill="x", padx=14, pady=(2, 12))
         spark = tk.Canvas(status, height=22, bg=C["panel_alt"], highlightthickness=0)
         spark.pack(fill="x", padx=12, pady=(0, 8))
@@ -700,6 +719,9 @@ class DashboardApp:
         self.overlay_enabled_var = tk.BooleanVar(value=bool(self.settings.get("overlay", {}).get("enabled", True)))
         self.overlay_move_var = tk.BooleanVar(value=bool(self.settings.get("overlay", {}).get("move_mode", False)))
         self.overlay_layout_var = tk.StringVar(value=str(self.settings.get("overlay", {}).get("layout", "horizontal")))
+        self.overlay_scale_var = tk.DoubleVar(
+            value=self._overlay_scale_value(self.settings.get("overlay", {}).get("scale", 1.0)),
+        )
         guard = self.settings.get("input_guard", {})
         self.input_guard_enabled_var = tk.BooleanVar(value=bool(guard.get("enabled", True)))
         self._check(general, "显示透明战斗悬浮提示", self.overlay_enabled_var, "头像分段地图仅展开当前附近轴段，顶部节点显示整轴位置").pack(fill="x", padx=22, pady=6)
@@ -719,6 +741,19 @@ class DashboardApp:
             width=18, style="Dark.TCombobox",
         ).pack(side="left", ipady=4, padx=(10, 12))
         _label(layout_row, "horizontal 横向地图 · vertical 纵向地图 · waterfall 瀑布地图", size=8, color=C["muted"], anchor="w").pack(side="left")
+        scale_row = tk.Frame(general, bg=C["panel"])
+        scale_row.pack(fill="x", padx=22, pady=(10, 2))
+        _label(scale_row, "悬浮窗大小", size=10, anchor="w", width=18).pack(side="left")
+        tk.Scale(
+            scale_row, from_=.65, to=1.5, resolution=.05, orient="horizontal", showvalue=False,
+            variable=self.overlay_scale_var, command=self._preview_overlay_scale,
+            bg=C["panel"], fg=C["text"], troughcolor=C["panel_alt"], activebackground=C["purple"],
+            highlightthickness=0, bd=0,
+        ).pack(side="left", fill="x", expand=True, padx=(10, 16))
+        self.overlay_scale_value = _label(
+            scale_row, f"{self.overlay_scale_var.get():.0%}", size=10, color="#D8D0FF", width=6,
+        )
+        self.overlay_scale_value.pack(side="right")
         guard_row = tk.Frame(general, bg=C["panel"])
         guard_row.pack(fill="x", padx=22, pady=(10, 2))
         self.basic_lock_var = tk.IntVar(value=int(guard.get("basic_lock_ms", 110)))
@@ -879,7 +914,7 @@ class DashboardApp:
         self._page_header(parent, "关于", "鸣潮连招辅助 · Windows 离线逐键教练")
         card = self._section(parent)
         _label(card, "鸣潮 · 连招教练", size=25, weight="bold", anchor="w").pack(fill="x", padx=28, pady=(28, 7))
-        _label(card, "v1.4.1", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
+        _label(card, "v1.5.0", size=11, color="#D8D0FF", anchor="w").pack(fill="x", padx=28)
         _label(card, "本程序只读取你配置的按键状态，不拦截、不模拟、不修改游戏输入。", size=11, color=C["muted"], anchor="w", wraplength=850, justify="left").pack(fill="x", padx=28, pady=(18, 20))
         _label(card, "测试阶段 · 仅供学习交流 · 完全免费 · 禁止商业售卖", size=11, color=C["gold"], weight="bold", anchor="w").pack(fill="x", padx=28, pady=(0, 14))
         for text in ("✓  完全离线运行", "✓  不保存完整按键日志", "✓  截图和识别模板仅保存在本机", "✓  启动轴完成后自动进入循环轴"):
@@ -1190,28 +1225,32 @@ class DashboardApp:
         canvas = self.float_canvas
         canvas.delete("all")
         overlay = self.settings.get("overlay", {})
+        scale = self._overlay_scale_value(overlay.get("scale", 1.0))
+        self._overlay_draw_scale = scale
         move_mode = bool(overlay.get("move_mode", False))
         mode = str(overlay.get("layout", "horizontal"))
         segments = build_combo_segments(self.engine.sequence_steps(), view.phase)
         plan = plan_combo_map(
-            segments, mode, self.root.winfo_screenwidth(), self.root.winfo_screenheight(),
+            segments, mode,
+            max(420, round(self.root.winfo_screenwidth() / scale)),
+            max(260, round(self.root.winfo_screenheight() / scale)),
             move_bar_height=30 if move_mode else 0,
         )
-        self._resize_battle_overlay(plan.width, plan.height)
+        self._resize_battle_overlay(round(plan.width * scale), round(plan.height * scale))
 
         if move_mode:
-            canvas.create_line(8, 30, plan.width - 8, 30, fill="#090B12", width=4)
-            canvas.create_line(8, 30, plan.width - 8, 30, fill=C["purple"], width=1)
+            canvas.create_line(8, 30, plan.width - 8, 30, fill="#090B12", width=self._hud_width(4))
+            canvas.create_line(8, 30, plan.width - 8, 30, fill=C["purple"], width=self._hud_width(1))
             self._canvas_text_with_halo(
                 canvas,
                 14, 17, anchor="w",
                 text=f"移动模式  ·  {self._overlay_layout_label(mode)}  ·  拖动空白区域定位",
-                fill="#E2DAFF", font=("Microsoft YaHei UI", 9, "bold"),
+                fill="#E2DAFF", font=self._hud_font("Microsoft YaHei UI", 9, "bold"),
             )
             self._canvas_text_with_halo(
                 canvas,
                 plan.width - 14, 17, anchor="e", text=f"{view.phase}轴 · 第 {view.index + 1}/{view.total} 步",
-                fill=C["muted"], font=("Microsoft YaHei UI", 8),
+                fill=C["muted"], font=self._hud_font("Microsoft YaHei UI", 8),
             )
 
         self._draw_combo_map_overview(canvas, segments, plan.width, 42 if move_mode else 12)
@@ -1222,13 +1261,15 @@ class DashboardApp:
         if plan.hidden_before:
             self._canvas_text_with_halo(
                 canvas, 5, plan.height // 2, anchor="w", text=f"‹ {plan.hidden_before}",
-                fill=C["muted"], font=("Segoe UI", 9, "bold"),
+                fill=C["muted"], font=self._hud_font("Segoe UI", 9, "bold"),
             )
         if plan.hidden_after:
             self._canvas_text_with_halo(
                 canvas, plan.width - 5, plan.height // 2, anchor="e", text=f"{plan.hidden_after} ›",
-                fill=C["muted"], font=("Segoe UI", 9, "bold"),
+                fill=C["muted"], font=self._hud_font("Segoe UI", 9, "bold"),
             )
+        if scale != 1.0:
+            canvas.scale("all", 0, 0, scale, scale)
 
     def _draw_combo_map_overview(self, canvas: tk.Canvas, segments, width: int, y: int) -> None:
         """Render the entire phase as a quiet node map above the local capsules."""
@@ -1236,8 +1277,8 @@ class DashboardApp:
             return
         left, right = 52, max(53, width - 52)
         current = current_segment_index(segments)
-        canvas.create_line(left, y + 8, right, y + 8, fill="#090B12", width=5)
-        canvas.create_line(left, y + 8, right, y + 8, fill="#71809A", width=2)
+        canvas.create_line(left, y + 8, right, y + 8, fill="#090B12", width=self._hud_width(5))
+        canvas.create_line(left, y + 8, right, y + 8, fill="#71809A", width=self._hud_width(2))
         role_colors = (C["purple"], C["red"], C["blue"])
         for index, segment in enumerate(segments):
             x = left if len(segments) == 1 else left + (right - left) * index / (len(segments) - 1)
@@ -1252,16 +1293,16 @@ class DashboardApp:
             elif segment.state == "completed":
                 color = "#397359"
             canvas.create_oval(x - radius, y + 8 - radius, x + radius, y + 8 + radius,
-                               fill=color, outline="#FFFFFF" if index == current else "", width=2)
+                               fill=color, outline="#FFFFFF" if index == current else "", width=self._hud_width(2))
         self._canvas_text_with_halo(
             canvas, 12, y + 8, anchor="w",
             text="启动" if segments[0].phase == "启动" else "循环",
             fill=C["gold"] if segments[0].phase == "启动" else C["blue"],
-            font=("Microsoft YaHei UI", 8, "bold"),
+            font=self._hud_font("Microsoft YaHei UI", 8, "bold"),
         )
         self._canvas_text_with_halo(
             canvas, width - 12, y + 8, anchor="e", text=f"段 {current + 1}/{len(segments)}",
-            fill="#D6DCE8", font=("Microsoft YaHei UI", 8, "bold"),
+            fill="#D6DCE8", font=self._hud_font("Microsoft YaHei UI", 8, "bold"),
         )
 
     def _draw_combo_map_segment(self, canvas: tk.Canvas, segment, placement, view: EngineView,
@@ -1284,34 +1325,36 @@ class DashboardApp:
         # remain visible over the game.
         canvas.create_polygon(
             self._rounded_rectangle_points(capsule_left, capsule_top, x + width, capsule_bottom, 22),
-            smooth=True, splinesteps=24, fill="", outline="#080A10", width=6,
+            smooth=True, splinesteps=24, fill="", outline="#080A10", width=self._hud_width(6),
         )
         canvas.create_polygon(
             self._rounded_rectangle_points(capsule_left, capsule_top, x + width, capsule_bottom, 22),
             smooth=True, splinesteps=24, fill="", outline=outline,
-            width=3 if segment.state in {"current", "error"} else 2,
+            width=self._hud_width(3 if segment.state in {"current", "error"} else 2),
         )
         accent = C["gold"] if segment.phase == "启动" else C["blue"]
         canvas.create_line(capsule_left + 32, capsule_bottom - 3, x + width - 20, capsule_bottom - 3,
-                           fill="#080A10", width=5)
+                           fill="#080A10", width=self._hud_width(5))
         canvas.create_line(capsule_left + 32, capsule_bottom - 3, x + width - 20, capsule_bottom - 3,
-                           fill=accent, width=2)
+                           fill=accent, width=self._hud_width(2))
 
         portrait_center_x, portrait_center_y = x + 43, y + 39
         portrait_size = 64
         canvas.create_oval(portrait_center_x - 35, portrait_center_y - 35,
                            portrait_center_x + 35, portrait_center_y + 35,
-                           fill="", outline="#080A10", width=7)
+                           fill="", outline="#080A10", width=self._hud_width(7))
         canvas.create_oval(portrait_center_x - 35, portrait_center_y - 35,
                            portrait_center_x + 35, portrait_center_y + 35,
-                           fill="", outline=outline, width=3)
-        portrait = self._character_photo(segment.character, portrait_size)
+                           fill="", outline=outline, width=self._hud_width(3))
+        portrait = self._character_photo(
+            segment.character, round(portrait_size * self._overlay_draw_scale),
+        )
         if portrait:
             canvas.create_image(portrait_center_x, portrait_center_y, image=portrait, anchor="center")
         else:
             self._canvas_text_with_halo(
                 canvas, portrait_center_x, portrait_center_y, text=segment.character[:1],
-                fill="#FFFFFF", font=("Microsoft YaHei UI", 20, "bold"),
+                fill="#FFFFFF", font=self._hud_font("Microsoft YaHei UI", 20, "bold"),
             )
 
         action_left = x + 88
@@ -1322,26 +1365,28 @@ class DashboardApp:
             cue = step.cue
             action = self.engine.action_for(cue)
             mapping = self.overlay_icon_mappings.get(action) or self.overlay_icon_mappings.get(cue.action)
-            photo = self.overlay_icon_photos.get(mapping["icon"]) if mapping and overlay.get("show_icons", True) else None
+            photo = self._overlay_icon_photo(
+                mapping["icon"], round(28 * self._overlay_draw_scale),
+            ) if mapping and overlay.get("show_icons", True) else None
             is_current = step.state in {"current", "error"}
             if is_current:
                 key_outline = C["red"] if step.state == "error" else C["gold"] if view.input_locked else "#FFFFFF"
                 canvas.create_rectangle(center_x - 18, y + 18, center_x + 18, y + 56,
-                                        fill="", outline="#080A10", width=5)
+                                        fill="", outline="#080A10", width=self._hud_width(5))
                 canvas.create_rectangle(center_x - 18, y + 18, center_x + 18, y + 56,
-                                        fill="", outline=key_outline, width=2)
+                                        fill="", outline=key_outline, width=self._hud_width(2))
             if photo:
                 canvas.create_image(center_x, y + 37, image=photo, anchor="center")
             else:
                 token = mapping["token"] if mapping else cue.display_key
                 self._canvas_text_with_halo(
                     canvas, center_x, y + 37, text=token.upper(), fill=text_color,
-                    font=("Microsoft YaHei UI", 17, "bold"),
+                    font=self._hud_font("Microsoft YaHei UI", 17, "bold"),
                 )
             self._canvas_text_with_halo(
                 canvas, center_x + 15, y + 18, anchor="ne", text=self._overlay_key(cue),
                 fill=C["red"] if step.state == "error" else "#F0EBFF",
-                font=("Microsoft YaHei UI", 6, "bold"), halo_width=1,
+                font=self._hud_font("Microsoft YaHei UI", 6, "bold"), halo_width=1,
             )
 
         label = segment.label
@@ -1349,7 +1394,7 @@ class DashboardApp:
             label = label[:17] + "…"
         self._canvas_text_with_halo(
             canvas, x + width / 2, y + height - 8, text=label, fill=text_color,
-            font=("Microsoft YaHei UI", 10, "bold"), anchor="s",
+            font=self._hud_font("Microsoft YaHei UI", 10, "bold"), anchor="s",
         )
 
     @staticmethod
@@ -1541,6 +1586,12 @@ class DashboardApp:
         self.root.attributes("-alpha", value)
         self.opacity_value.config(text=f"{value:.0%}")
 
+    def _preview_overlay_scale(self, _value: str = "") -> None:
+        value = self._overlay_scale_value(self.overlay_scale_var.get())
+        self.settings.setdefault("overlay", {})["scale"] = value
+        self.overlay_scale_value.config(text=f"{value:.0%}")
+        self._draw_battle_overlay(self.engine.view())
+
     def _pick_game_window(self) -> None:
         titles = [title for title in enumerate_window_titles() if "鸣潮 · 连招教练" not in title and "鸣潮逐键教练" not in title]
         preferred = next((title for title in titles if "鸣潮" in title or "Wuthering Waves" in title), "")
@@ -1561,6 +1612,7 @@ class DashboardApp:
         overlay["enabled"] = bool(self.overlay_enabled_var.get())
         overlay["move_mode"] = bool(self.overlay_move_var.get())
         overlay["layout"] = self.overlay_layout_var.get() if self.overlay_layout_var.get() in {"horizontal", "vertical", "waterfall"} else "horizontal"
+        overlay["scale"] = self._overlay_scale_value(self.overlay_scale_var.get())
         guard = self.settings.setdefault("input_guard", {})
         guard["enabled"] = bool(self.input_guard_enabled_var.get())
         guard["basic_lock_ms"] = max(0, min(500, int(self.basic_lock_var.get())))

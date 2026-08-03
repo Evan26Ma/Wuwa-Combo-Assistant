@@ -21,6 +21,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "enabled": True,
         "x": None,
         "y": 72,
+        "scale": 1.0,
         "layout": "horizontal",
         "move_mode": False,
         "show_icons": True,
